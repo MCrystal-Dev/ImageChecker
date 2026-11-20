@@ -1,14 +1,37 @@
 # ImageChecker
 
-ImageChecker is a planned Windows utility for renaming, converting, resizing, and checking images from the File Explorer right-click menu. The menu will work with a single selected image or a batch.
+ImageChecker adds a right-click menu to Windows File Explorer for working with one image or a batch. It supports PNG, JPG/JPEG, and WebP.
 
-## Planned features
+## Get started
 
-- **Rename with today's date.** Add the local date to the original filename, such as `2026-11-20_beach.jpg`.
-- **Rename with a daily counter.** Choose a number-only name like `004.jpg` or include the date as in `2026-11-20_004.jpg`. Single-image and batch renames share a counter. ImageChecker saves it across restarts, starts at `001` each day, and advances it after a successful rename.
-- **Convert formats.** Export selected images as PNG, JPG, or WebP.
-- **Resize by dimensions.** Fit images within a chosen width and height while preserving their aspect ratio.
-- **Resize to a file size limit.** Set a maximum size per image, such as 500 KB, and preview the resulting dimensions and file size.
-- **Find duplicates.** Compare selected images with images in their containing folders and review matches side by side. Moving selected copies to the Recycle Bin requires explicit confirmation that lists the affected files.
+1. Download **ImageChecker-win-x64.zip** from the [latest release](https://github.com/MCrystal-Dev/ImageChecker/releases/latest).
+2. Extract the entire ZIP to a folder you want to keep, then double-click **Enable Explorer Menu.cmd**. It registers the menu for your Windows account.
+3. Select one or more images in File Explorer and right-click. On Windows 11, choose **Show more options → ImageChecker**.
+4. Choose an action. Review the preview, then click **Rename**, **Save copies**, or **Review removal**.
 
-Renaming, conversion, and resizing will show a preview and flag filename conflicts before applying changes. Conversion and resizing will create new copies by default.
+You can also double-click **ImageChecker.exe** and select images from the file picker. The download includes the .NET runtime and runs on x64 Windows 10 and 11. To remove the menu, run **Remove Explorer Menu.cmd**. If you move the extracted folder, run **Enable Explorer Menu.cmd** from its new location.
+
+## Actions
+
+| Action | Result |
+| --- | --- |
+| Rename with today's date | Adds the local date to each original name, for example `2026-11-20_beach.jpg`. |
+| Rename with daily counter | Produces `001.jpg`, `002.jpg`, etc. Select **Include today's date** for `2026-11-20_001.jpg`. Both styles share a counter across folders and app restarts. It starts at 001 each local day, skips occupied names and records successful renames. |
+| Change file format | Writes PNG, JPG or WebP copies beside the originals. Transparent pixels use a white background when exporting to JPG. |
+| Resize by dimensions | Fits within the chosen width and height in pixels, preserving proportions and avoiding enlargement. |
+| Resize to a file size limit | Creates a copy at or below the chosen number of KB (1 KB = 1,000 bytes). Shows the resulting dimensions and exact byte count before saving. For larger files it can reduce encoding quality, strip metadata, and shrink the image. |
+| Find duplicates | Scans the selected images' immediate folders for byte-identical files matching the selection. Compare images side by side, check individual copies, and review the full paths before moving them to the Recycle Bin. At least one copy in each group must be kept. |
+
+Exported copies use a suffix such as `-resized`. The preview shows the next available name when a destination is occupied. If another program creates the destination after preview, ImageChecker reports the conflict. Image export supports still images. Duplicate matching uses file bytes, so edited or re-encoded versions can appear as separate images.
+
+## Build
+
+On Windows x64 with the .NET 10 SDK:
+
+```powershell
+dotnet run --project src
+dotnet run --project tests -c Release
+.\packaging\Build.ps1
+```
+
+The build script produces `dist/ImageChecker-win-x64.zip`. The app uses Windows Forms, Magick.NET and a per-user Explorer drop target that receives the full selection in one invocation. The ZIP includes notices for the bundled components.
