@@ -6,6 +6,30 @@ internal static class Program
     internal static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp"];
     internal static bool Supported(string path) => Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
+    internal static string[] ResolveImages(IEnumerable<string> selection)
+    {
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (string path in selection)
+            {
+                string full = Path.GetFullPath(path);
+                if (Directory.Exists(full))
+                    files.UnionWith(Directory.EnumerateFiles(full).Where(Supported));
+                else if (Supported(full) && File.Exists(full))
+                    files.Add(full);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(ex.Message, "Could not read the selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return [];
+        }
+        if (files.Count == 0)
+            MessageBox.Show("No PNG, JPG, JPEG or WebP images were found directly in the selection.", "ImageChecker");
+        return files.ToArray();
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -22,12 +46,17 @@ internal static class Program
                 ShellMenu.Listen(action);
                 return 0;
             }
-            var paths = args.Where(File.Exists).Where(Supported).ToArray();
-            if (paths.Length == 0)
+            string[] paths;
+            if (args.Length == 0)
             {
                 using var picker = new OpenFileDialog { Title = "Select images for ImageChecker", Multiselect = true, Filter = "Images|*.png;*.jpg;*.jpeg;*.webp" };
                 if (picker.ShowDialog() != DialogResult.OK) return 0;
                 paths = picker.FileNames;
+            }
+            else
+            {
+                paths = ResolveImages(args);
+                if (paths.Length == 0) return 0;
             }
             Application.Run(new Workspace(paths, 0));
             return 0;

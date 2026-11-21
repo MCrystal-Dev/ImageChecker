@@ -7,22 +7,13 @@ namespace ImageChecker;
 
 internal static class ShellMenu
 {
-    private const string MenuKey = @"Software\Classes\*\shell\MCrystal.ImageChecker";
+    private const string FileMenu = @"Software\Classes\*\shell\MCrystal.ImageChecker";
+    private const string FolderMenu = @"Software\Classes\Directory\shell\MCrystal.ImageChecker";
     private static Guid ClassId(int index) => new($"F9F9A2F7-DABC-4DFB-B271-53150000000{index}");
 
     internal static void Register(bool install)
     {
         string executable = Environment.ProcessPath!;
-        if (install)
-        {
-            using var menu = Registry.CurrentUser.CreateSubKey(MenuKey);
-            menu.SetValue("MUIVerb", "ImageChecker");
-            menu.SetValue("Icon", $"\"{executable}\",0");
-            menu.SetValue("SubCommands", "");
-            menu.SetValue("MultiSelectModel", "Player");
-            menu.SetValue("AppliesTo", string.Join(" OR ", Program.Extensions.Select(e => $"System.FileExtension:=\"{e}\"")));
-        }
-        else Registry.CurrentUser.DeleteSubKeyTree(MenuKey, false);
         for (int i = 0; i < Program.Actions.Length; i++)
         {
             string id = ClassId(i).ToString("B");
@@ -34,11 +25,29 @@ internal static class ShellMenu
             }
             using var server = Registry.CurrentUser.CreateSubKey(cls + @"\LocalServer32");
             server.SetValue("", $"\"{executable}\" --shell {i}");
-            using var verb = Registry.CurrentUser.CreateSubKey(MenuKey + @"\shell\action" + i);
-            verb.SetValue("MUIVerb", Program.Actions[i] + "…");
-            verb.SetValue("MultiSelectModel", "Player");
-            using var target = verb.CreateSubKey("DropTarget");
-            target.SetValue("CLSID", id);
+        }
+        foreach (string path in new[] { FileMenu, FolderMenu })
+        {
+            if (!install)
+            {
+                Registry.CurrentUser.DeleteSubKeyTree(path, false);
+                continue;
+            }
+            using var menu = Registry.CurrentUser.CreateSubKey(path);
+            menu.SetValue("MUIVerb", "ImageChecker");
+            menu.SetValue("Icon", $"\"{executable}\",0");
+            menu.SetValue("SubCommands", "");
+            menu.SetValue("MultiSelectModel", "Player");
+            if (path == FileMenu)
+                menu.SetValue("AppliesTo", string.Join(" OR ", Program.Extensions.Select(e => $"System.FileExtension:=\"{e}\"")));
+            for (int i = 0; i < Program.Actions.Length; i++)
+            {
+                using var verb = menu.CreateSubKey(@"shell\action" + i);
+                verb.SetValue("MUIVerb", Program.Actions[i] + "…");
+                verb.SetValue("MultiSelectModel", "Player");
+                using var target = verb.CreateSubKey("DropTarget");
+                target.SetValue("CLSID", ClassId(i).ToString("B"));
+            }
         }
         SHChangeNotify(0x08000000, 0, 0, 0);
     }
@@ -61,7 +70,9 @@ internal static class ShellMenu
                 if (selection == null && DateTime.UtcNow - started < TimeSpan.FromMinutes(2)) return;
                 timer.Stop();
                 if (selection is not { Length: > 0 }) { context.ExitThread(); return; }
-                context.MainForm = new Workspace(selection, action);
+                var files = Program.ResolveImages(selection);
+                if (files.Length == 0) { context.ExitThread(); return; }
+                context.MainForm = new Workspace(files, action);
                 context.MainForm.Show();
                 context.MainForm.Activate();
             };
@@ -125,7 +136,7 @@ public sealed class ImageDrop(Action<string[]> receive) : IShellDropTarget
                 uint length = DragQueryFile(medium.unionmember, i, null, 0);
                 var name = new System.Text.StringBuilder((int)length + 1);
                 DragQueryFile(medium.unionmember, i, name, length + 1);
-                if (Program.Supported(name.ToString())) paths.Add(name.ToString());
+                paths.Add(name.ToString());
             }
             receive(paths.ToArray());
             effect &= 1;
