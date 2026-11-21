@@ -64,7 +64,12 @@ internal static class ReviewChecks
         var controls = Descendants(form).ToArray();
         var list = controls.OfType<ListView>().Single();
         var format = controls.OfType<ComboBox>().Single(box => box.Items.Contains("JPG"));
-        var save = controls.OfType<Button>().Single(button => button.Text == "Save copies");
+        var save = controls.OfType<Button>().Single(button => button.Text == "Export copies");
+        var overwrite = controls.OfType<Button>().Single(button => button.Text == "Overwrite");
+        var selectAll = controls.OfType<Button>().Single(button => button.Text == "Select all");
+        var refresh = controls.OfType<Button>().Single(button => button.Text == "Refresh");
+        if (selectAll.Parent != refresh.Parent || selectAll.Right > refresh.Left || selectAll.Parent != save.Parent)
+            throw new Exception("Select all must sit to the left of Refresh in the footer.");
         void WaitFor(Func<bool> ready)
         {
             var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -89,6 +94,7 @@ internal static class ReviewChecks
         {
             action.SelectedIndex = mode;
             CheckRows();
+            if (overwrite.Visible != (mode is 2 or 3 or 4)) throw new Exception("Overwrite visible for wrong action.");
             if (mode == 5)
             {
                 if (save.Enabled || list.Items.Cast<ListViewItem>().Count(i => i.Tag is (string, string)) != 2)
@@ -138,6 +144,29 @@ internal static class ReviewChecks
         int[] selected = [1, 4, 5, 6];
         if (!list.SelectedIndices.Cast<int>().SequenceEqual(selected)) throw new Exception("Ctrl/Shift selection did not match Explorer.");
         WaitFor(() => save.Enabled);
+        void ConfirmOverwrite(bool accept, int expected)
+        {
+            bool valid = false;
+            using var timer = new System.Windows.Forms.Timer { Interval = 50 };
+            timer.Tick += (_, _) =>
+            {
+                var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Text == "Overwrite originals?");
+                if (dialog == null) return;
+                timer.Stop();
+                var parts = Descendants(dialog).ToArray();
+                valid = parts.OfType<Label>().Any(label => label.Text.Contains("destructive") && label.Text.Contains("permanently removed"))
+                    && parts.OfType<TextBox>().Single().Lines.Length == expected
+                    && dialog.ActiveControl is Button { Text: "Cancel" };
+                parts.OfType<Button>().Single(b => b.Text == (accept ? "OK" : "Cancel")).PerformClick();
+            };
+            timer.Start();
+            overwrite.PerformClick();
+            if (!valid) throw new Exception("Missing destructive warning, paths, or default Cancel button.");
+        }
+        var originals = files.Select(File.ReadAllBytes).ToArray();
+        ConfirmOverwrite(false, selected.Length);
+        if (files.Where((path, i) => !File.ReadAllBytes(path).SequenceEqual(originals[i]) || File.Exists(Path.ChangeExtension(path, ".jpg"))).Any())
+            throw new Exception("Cancel modified a source or produced a conversion.");
         save.PerformClick();
         WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
         for (int i = 0; i < files.Length; i++)
@@ -150,6 +179,15 @@ internal static class ReviewChecks
             if (output.Format != MagickFormat.Jpeg) throw new Exception("JPG save failed.");
         }
         if (save.Enabled) throw new Exception("An empty selection enabled Save.");
+        list.Items[1].Selected = true;
+        WaitFor(() => overwrite.Enabled);
+        ConfirmOverwrite(true, 1);
+        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        if (File.Exists(files[1]) || files.Where((path, i) => i != 1 && !File.ReadAllBytes(path).SequenceEqual(originals[i])).Any())
+            throw new Exception("Confirmed overwrite did not respect the selection.");
+        files[1] = Path.ChangeExtension(files[1], ".jpg");
+        using (var updated = new MagickImage(files[1]))
+            if (updated.Format != MagickFormat.Jpeg) throw new Exception("Incorrect replacement format.");
         foreach (int i in selected) list.Items[i].Selected = true;
         action.SelectedIndex = 1;
         WaitFor(() => save.Enabled);

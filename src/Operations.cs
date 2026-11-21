@@ -1,6 +1,8 @@
 using ImageMagick;
 using Microsoft.Win32;
 using System.Globalization;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
 namespace ImageChecker;
@@ -62,6 +64,7 @@ internal static class Operations
             int number = options.Action == 1 ? Locked(k => (int)(k.GetValue(plan.Day) ?? 0)) : 0;
             plan.CounterStart = number;
             var used = new HashSet<string>(Names);
+            string? exportFolder = null;
             foreach (var src in paths.Distinct(Names))
             {
                 try
@@ -83,6 +86,7 @@ internal static class Operations
                         string suffix = options.Action switch { 0 => "", 2 => "-converted", 3 => "-resized", 4 => "-limited", _ => throw new ArgumentException("Unknown action.") };
                         string outputStem = options.Action == 0 ? $"{plan.Day}_{stem}" : stem + suffix;
                         if (options.Action == 2) ext = "." + options.Format.ToLowerInvariant();
+                        if (options.Action >= 2) directory = exportFolder ??= ExportFolder(directory, create: false);
                         target = Path.Combine(directory, outputStem + ext);
                         for (int i = 2; Taken(target, used); i++)
                         {
@@ -106,6 +110,28 @@ internal static class Operations
         catch { plan.Dispose(); throw; }
     }
     private static bool Taken(string path, HashSet<string> used) => used.Contains(path) || Path.Exists(path);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateDirectoryW(string path, nint securityAttributes);
+
+    private static string ExportFolder(string parent, bool create)
+    {
+        for (int number = 1; ; number++)
+        {
+            string path = Path.Combine(parent, number == 1 ? "ImageChecker Export" : $"ImageChecker Export ({number})");
+            if (!create)
+            {
+                if (!Path.Exists(path)) return path;
+                continue;
+            }
+            if (CreateDirectoryW(path, 0)) return path;
+            int error = Marshal.GetLastWin32Error();
+            if (error is not (80 or 183)) throw new IOException($"Could not create {path}.", new Win32Exception(error));
+        }
+    }
+
+    internal static string OverwriteTarget(Change row) =>
+        FormatOf(row.Source) == FormatOf(row.Staged!) ? row.Source : Path.ChangeExtension(row.Source, Path.GetExtension(row.Staged));
 
     internal static Change NumberedRename(string source, Stamp original, string day, ref int number)
     {
@@ -164,7 +190,7 @@ internal static class Operations
         return $"{image.Width} × {image.Height} px · {new FileInfo(dest).Length:N0} bytes";
     }
 
-    internal static ApplyResult Apply(Plan plan, int action, IReadOnlyList<Change>? selected = null)
+    internal static ApplyResult Apply(Plan plan, int action, IReadOnlyList<Change>? selected = null, bool overwrite = false)
     {
         ApplyResult Run(RegistryKey? key)
         {
@@ -173,6 +199,7 @@ internal static class Operations
                 throw new IOException("The daily counter changed. Preview again for current names.");
             var errors = new List<string>();
             var completed = new List<Change>();
+            string? exportFolder = null;
             foreach (var row in selected ?? plan.Changes)
             {
                 try
@@ -187,9 +214,31 @@ internal static class Operations
                     }
                     else
                     {
-                        string temp = Path.Combine(Path.GetDirectoryName(row.Target)!, $".imagechecker-{Guid.NewGuid():N}.tmp");
-                        try { File.Copy(row.Staged, temp); File.Move(temp, row.Target); }
+                        string target;
+                        if (overwrite) target = OverwriteTarget(row);
+                        else
+                        {
+                            exportFolder ??= ExportFolder(Path.GetDirectoryName(Path.GetDirectoryName(row.Target)!)!, create: true);
+                            target = Path.Combine(exportFolder, Path.GetFileName(row.Target));
+                        }
+                        string temp = Path.Combine(Path.GetDirectoryName(target)!, $".imagechecker-{Guid.NewGuid():N}.tmp");
+                        try
+                        {
+                            File.Copy(row.Staged, temp);
+                            bool samePath = Names.Equals(target, row.Source);
+                            using var source = overwrite && !samePath
+                                ? new FileStream(row.Source, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete) : null;
+                            if (row.Original != Stamp.Read(row.Source)) throw new IOException("Source changed since preview.");
+                            File.Move(temp, target, overwrite && samePath);
+                            if (overwrite && !samePath)
+                            {
+                                try { File.Delete(row.Source); }
+                                catch (Exception ex) { throw new IOException($"Converted image saved to {target}. Could not remove the original. {ex.Message}", ex); }
+                            }
+                        }
                         finally { File.Delete(temp); }
+                        completed.Add(row with { Target = target });
+                        continue;
                     }
                     completed.Add(row);
                 }
@@ -201,7 +250,13 @@ internal static class Operations
             }
             return new(completed, errors);
         }
-        return action == 1 ? Locked(k => Run(k)) : Run(null);
+        if (action == 1) return Locked(k => Run(k));
+        if (!overwrite) return Run(null);
+        using var gate = new Mutex(false, @"Local\MCrystal.ImageChecker.Overwrite");
+        try { if (!gate.WaitOne(30000)) throw new IOException("Another overwrite is still running. Try again."); }
+        catch (AbandonedMutexException) { }
+        try { return Run(null); }
+        finally { gate.ReleaseMutex(); }
     }
 
     internal static string Hash(Stream input) => Convert.ToHexString(SHA256.HashData(input));

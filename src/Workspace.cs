@@ -18,6 +18,7 @@ internal sealed class Workspace : Form
     private readonly Button selectAll = new() { Text = "Select all", AutoSize = true, Anchor = AnchorStyles.Right, Enabled = false };
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
     private readonly Button apply = new() { Text = "Apply", AutoSize = true, Enabled = false };
+    private readonly Button overwrite = new() { Text = "Overwrite", AutoSize = true, Enabled = false };
     private Plan? plan;
     private Dictionary<string, List<string>> groups = [];
     private bool busy;
@@ -38,17 +39,11 @@ internal sealed class Workspace : Form
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 48), new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
-        var toolbar = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
-        toolbar.ColumnStyles.Add(new(SizeType.Percent, 100));
-        toolbar.ColumnStyles.Add(new(SizeType.AutoSize));
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Margin = new(0) };
+        var toolbar = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
         options.Dock = DockStyle.None;
         options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         options.Margin = new(10, 0, 0, 0);
-        actions.Controls.AddRange([Caption("Action"), action, options]);
-        Appearance.StyleButton(selectAll);
-        toolbar.Controls.Add(actions, 0, 0);
-        toolbar.Controls.Add(selectAll, 1, 0);
+        toolbar.Controls.AddRange([Caption("Action"), action, options]);
         layout.Controls.Add(toolbar, 0, 0);
         rows.Columns.Add("Source image", 310); rows.Columns.Add("Output", 235); rows.Columns.Add("Details", 390);
         rows.ShowItemToolTips = true;
@@ -75,12 +70,19 @@ internal sealed class Workspace : Form
         compare.Controls.Add(PreviewPanel(leftRole, leftTitle, before, new(0, 0, 5, 0)), 0, 0);
         compare.Controls.Add(PreviewPanel(rightRole, rightTitle, after, new(5, 0, 0, 0)), 1, 0);
         layout.Controls.Add(compare, 0, 2);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Margin = new(0, 10, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 5, Margin = new(0, 10, 0, 0) };
         status.ForeColor = Appearance.Secondary;
         Appearance.StyleButton(preview);
+        Appearance.StyleButton(selectAll);
+        Appearance.StyleButton(overwrite);
         Appearance.StyleButton(apply, primary: true);
-        footer.ColumnStyles.Add(new(SizeType.Percent, 100)); footer.ColumnStyles.Add(new(SizeType.AutoSize)); footer.ColumnStyles.Add(new(SizeType.AutoSize));
-        footer.Controls.Add(status, 0, 0); footer.Controls.Add(preview, 1, 0); footer.Controls.Add(apply, 2, 0);
+        footer.ColumnStyles.Add(new(SizeType.Percent, 100));
+        foreach (Button button in new[] { selectAll, preview, overwrite, apply })
+        {
+            footer.ColumnStyles.Add(new(SizeType.AutoSize));
+            footer.Controls.Add(button, footer.ColumnStyles.Count - 1, 0);
+        }
+        footer.Controls.Add(status, 0, 0);
         layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
@@ -95,7 +97,7 @@ internal sealed class Workspace : Form
         {
             if (busy || selectionPending) return;
             selectionPending = true;
-            if (Mode != 5) apply.Enabled = false;
+            if (Mode != 5) apply.Enabled = overwrite.Enabled = false;
             BeginInvoke(() =>
             {
                 selectionPending = false;
@@ -119,6 +121,7 @@ internal sealed class Workspace : Form
         };
         preview.Click += async (_, _) => await Preview();
         apply.Click += async (_, _) => await Apply();
+        overwrite.Click += async (_, _) => await Apply(replaceOriginals: true);
         Configure();
         Shown += async (_, _) => await Preview();
         FormClosing += (_, e) => e.Cancel = busy;
@@ -166,12 +169,13 @@ internal sealed class Workspace : Form
         rightRole.Text = Mode == 5 ? "Matching copy" : "Preview";
         rows.Columns[1].Text = Mode == 5 ? "Folder" : "Output";
         rows.Columns[2].Text = Mode == 5 ? "Duplicate group" : "Details";
-        apply.Text = Mode == 5 ? "Review removal…" : Mode <= 1 ? "Rename" : "Save copies";
+        overwrite.Visible = Mode is 2 or 3 or 4;
+        apply.Text = Mode == 5 ? "Review removal…" : Mode <= 1 ? "Rename" : "Export copies";
     }
     private void QueueNumericPreview()
     {
         if (busy || Mode is not (3 or 4)) return;
-        apply.Enabled = false;
+        apply.Enabled = overwrite.Enabled = false;
         status.Text = "Updating preview…";
         editDelay.Stop();
         editDelay.Start();
@@ -185,7 +189,7 @@ internal sealed class Workspace : Form
     {
         selectAll.Enabled = false;
         rows.Items.Clear(); rows.Groups.Clear(); groups.Clear();
-        ClearPictures(); plan?.Dispose(); plan = null; apply.Enabled = false;
+        ClearPictures(); plan?.Dispose(); plan = null; apply.Enabled = overwrite.Enabled = false;
         status.Text = "Preview the selected action.";
     }
     private void ShowPair()
@@ -231,9 +235,10 @@ internal sealed class Workspace : Form
                 item.SubItems[2].Text = item.Selected ? change.Details : "";
                 item.ToolTipText = item.Selected ? change.Source + Environment.NewLine + change.Target : change.Source;
             }
-            status.Text = $"{count} of {files.Length} ready to {(Mode <= 1 ? "rename" : "save")} · Ctrl-click or Shift-click to select";
+            status.Text = $"{count} of {files.Length} selected · Ctrl-click or Shift-click to select";
             if (plan.Notes.Count > 0) status.Text += $" · {plan.Notes.Count} skipped";
             apply.Enabled = count > 0 && !editDelay.Enabled;
+            overwrite.Enabled = apply.Enabled && Mode is 2 or 3 or 4;
         }
         ShowPair();
     }
@@ -252,6 +257,7 @@ internal sealed class Workspace : Form
     {
         busy = on; UseWaitCursor = on; action.Enabled = options.Enabled = preview.Enabled = rows.Enabled = !on;
         selectAll.Enabled = !on && rows.Items.Count > 0;
+        overwrite.Enabled = false;
         apply.Enabled = !on && Mode == 5 && rows.CheckedItems.Count > 0;
         if (!on) UpdateSelection();
     }
@@ -328,33 +334,42 @@ internal sealed class Workspace : Form
         string path => path,
         _ => null
     };
-    private async Task Apply()
+    private async Task Apply(bool replaceOriginals = false)
     {
         if (Mode == 5) { RemoveCopies(); return; }
         if (plan == null || selectionPending || editDelay.Enabled) return;
         var selected = rows.SelectedItems.Cast<ListViewItem>().OrderBy(item => item.Index)
             .Select(item => item.Tag).OfType<Change>().ToArray();
         if (selected.Length == 0) return;
+        if (replaceOriginals)
+        {
+            string warning = $"This is destructive. The original {(selected.Length == 1 ? "version of this image" : $"versions of these {selected.Length} images")} will be permanently removed. Click OK to replace with the previewed result.";
+            var paths = selected.Select(row => Operations.Names.Equals(row.Source, Operations.OverwriteTarget(row))
+                ? row.Source : $"{row.Source} → {Path.GetFileName(Operations.OverwriteTarget(row))}");
+            if (!Details("Overwrite originals?", paths, "OK", warning)) return;
+        }
         Working(true);
         try
         {
             int mode = Mode;
-            var result = await Task.Run(() => Operations.Apply(plan, mode, selected));
+            var result = await Task.Run(() => Operations.Apply(plan, mode, selected, replaceOriginals));
             if (result.Errors.Count > 0) Details("Some files could not be processed", result.Errors);
             if (result.Done == files.Length && mode <= 1) { Working(false); Close(); return; }
-            if (selected.Length < files.Length && result.Done > 0)
+            string summary = mode <= 1 ? $"Renamed {result.Done}." : replaceOriginals ? $"Replaced {result.Done} original{(result.Done == 1 ? "" : "s")}."
+                : result.Done > 0 ? $"Exported {result.Done} to {Path.GetDirectoryName(result.Completed[0].Target)}" : "No copies exported.";
+            if (mode <= 1 || replaceOriginals)
             {
-                if (mode <= 1)
-                {
-                    var renamed = result.Completed.ToDictionary(change => change.Source, change => change.Target, Operations.Names);
-                    for (int i = 0; i < files.Length; i++) files[i] = renamed.GetValueOrDefault(files[i], files[i]);
-                }
+                var renamed = result.Completed.ToDictionary(change => change.Source, change => change.Target, Operations.Names);
+                for (int i = 0; i < files.Length; i++) files[i] = renamed.GetValueOrDefault(files[i], files[i]);
+            }
+            if (result.Done < files.Length)
+            {
                 busy = false;
                 await Preview(new HashSet<string>(Operations.Names));
-                status.Text = $"{result.Done} files {(mode <= 1 ? "renamed" : "saved")}. Select images for the next change.";
+                status.Text = summary;
                 return;
             }
-            Reset(); status.Text = $"{result.Done} files {(mode <= 1 ? "renamed" : "saved")}.";
+            Reset(); status.Text = summary;
         }
         catch (Exception ex) { Reset(); status.Text = ex.Message; }
         finally { if (!IsDisposed && busy) Working(false); }
@@ -368,7 +383,7 @@ internal sealed class Workspace : Form
         {
             MessageBox.Show(this, "Uncheck at least one file in each group to keep it.", "Keep a copy"); return;
         }
-        if (!Details("Move these files to the Recycle Bin?", targets, true)) return;
+        if (!Details("Move these files to the Recycle Bin?", targets, "Move to Recycle Bin")) return;
         var errors = new List<string>();
         int done = 0;
         foreach (var batch in selected.GroupBy(s => s.Hash))
@@ -390,16 +405,21 @@ internal sealed class Workspace : Form
         Reset(); status.Text = $"{done} files moved to the Recycle Bin.";
         if (errors.Count > 0) Details("Some copies could not be recycled", errors);
     }
-    private bool Details(string title, IEnumerable<string> lines, bool confirm = false)
+    private bool Details(string title, IEnumerable<string> lines, string? confirm = null, string? warning = null)
     {
         using var dialog = new Form { Text = title, Icon = Appearance.AppIcon, Size = new(720, 340), MinimumSize = new(400, 240), Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
         var list = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Lines = lines.ToArray(), Dock = DockStyle.Fill, BackColor = Appearance.Panel, ForeColor = Appearance.Text };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new(0, 8, 0, 0) };
-        var cancel = new Button { Text = confirm ? "Cancel" : "Close", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var cancel = new Button { Text = confirm != null ? "Cancel" : "Close", DialogResult = DialogResult.Cancel, AutoSize = true };
         buttons.Controls.Add(cancel); dialog.CancelButton = cancel; dialog.AcceptButton = cancel;
-        if (confirm) buttons.Controls.Add(new Button { Text = "Move to Recycle Bin", AutoSize = true, DialogResult = DialogResult.OK });
+        if (confirm != null) buttons.Controls.Add(new Button { Text = confirm, AutoSize = true, DialogResult = DialogResult.OK });
         foreach (Button button in buttons.Controls) Appearance.StyleButton(button);
         dialog.Controls.Add(list); dialog.Controls.Add(buttons);
+        if (warning != null)
+        {
+            dialog.Controls.Add(new Label { Text = warning, Dock = DockStyle.Top, AutoSize = true, MaximumSize = new(640, 0), Padding = new(0, 0, 0, 12), ForeColor = Appearance.Warning });
+            dialog.Shown += (_, _) => cancel.Focus();
+        }
         return dialog.ShowDialog(this) == DialogResult.OK;
     }
 }

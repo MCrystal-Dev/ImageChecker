@@ -54,7 +54,7 @@ internal static class Checks
                 using var plan = Operations.Preview([src], settings with { Action = mode, Format = format });
                 Check(plan.Notes.Count == 0, string.Join("\n", plan.Notes));
                 var row = plan.Changes.Single();
-                Check(!File.Exists(row.Target), "Preview changed disk");
+                Check(!Directory.Exists(Path.GetDirectoryName(row.Target)), "Preview created export folder");
                 Check(Operations.Apply(plan, mode).Done == 1, "Export failed");
                 using var result = new MagickImage(row.Target);
                 if (mode == 2) Check(result.Format == Operations.FormatOf(row.Target) || format == "PNG" && result.Format.ToString().StartsWith("Png"), "Wrong output format");
@@ -62,8 +62,21 @@ internal static class Checks
                 if (mode == 4) Check(new FileInfo(row.Target).Length <= settings.ByteLimit, "Size cap");
             }
             using var conflict = Operations.Preview([src], settings);
+            Directory.CreateDirectory(Path.GetDirectoryName(conflict.Changes.Single().Target)!);
             File.WriteAllText(conflict.Changes.Single().Target, "occupied");
-            Check(Operations.Apply(conflict, 2).Done == 0 && File.ReadAllText(conflict.Changes.Single().Target) == "occupied", "Overwrite protection");
+            var exports = Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(() => Operations.Apply(conflict, 2)))).GetAwaiter().GetResult();
+            Check(exports.All(export => export.Done == 1) && exports.Select(export => export.Completed.Single().Target).Distinct().Count() == 2
+                && File.ReadAllText(conflict.Changes.Single().Target) == "occupied", "Fresh folder per export");
+            string occupied = Path.ChangeExtension(src, ".jpg");
+            File.WriteAllText(occupied, "another file");
+            var original = File.ReadAllBytes(src);
+            Check(Operations.Apply(conflict, 2, overwrite: true).Done == 0 && original.SequenceEqual(File.ReadAllBytes(src))
+                && File.ReadAllText(occupied) == "another file", "Conversion overwrite collision");
+            using var resize = Operations.Preview([copy], settings with { Action = 3 });
+            var rewritten = Operations.Apply(resize, 3, overwrite: true);
+            Check(rewritten.Done == 1 && rewritten.Completed[0].Target == copy, "In-place overwrite: " + string.Join(", ", resize.Notes.Concat(rewritten.Errors)));
+            using (var resized = new MagickImage(copy)) Check(resized.Width == 80 && resized.Height == 60, "Overwritten dimensions");
+            Check(Operations.Apply(resize, 3, overwrite: true).Done == 0, "Stale overwrite protection");
             string prefix = DateTime.Today.ToString("yyyy_MM_dd", System.Globalization.CultureInfo.InvariantCulture) + "_";
             File.WriteAllText(Path.Combine(folder.FullName, prefix + "001.png"), "occupied");
             using var batch = Operations.Preview([src, copy], settings with { Action = 1 });
