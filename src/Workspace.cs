@@ -7,7 +7,6 @@ internal sealed class Workspace : Form
     private readonly string[] files;
     private readonly ComboBox action = Choice(Program.Actions);
     private readonly ComboBox format = Choice(["PNG", "JPG", "WebP"]);
-    private readonly CheckBox date = new() { Text = "Include today's date", AutoSize = true };
     private readonly NumericUpDown width = Number(1920, 100000), height = Number(1080, 100000), limit = Number(500, 1000000);
     private readonly FlowLayoutPanel options = new() { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
     private readonly ListView rows = new() { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = false };
@@ -32,7 +31,7 @@ internal sealed class Workspace : Form
         layout.ColumnStyles.Add(new(SizeType.Percent, 100));
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 54), new RowStyle(SizeType.Percent, 46), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
-        action.Width = 250; action.SelectedIndex = mode;
+        action.Width = 285; action.SelectedIndex = mode;
         var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         actions.Controls.AddRange([Caption("Action"), action]);
         layout.Controls.Add(actions, 0, 0); layout.Controls.Add(options, 0, 1);
@@ -50,7 +49,6 @@ internal sealed class Workspace : Form
         layout.Controls.Add(footer, 0, 4);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
-        date.CheckedChanged += async (_, _) => await Preview();
         editDelay.Tick += async (_, _) => await Preview();
         foreach (var field in new[] { width, height, limit })
         {
@@ -87,7 +85,6 @@ internal sealed class Workspace : Form
         options.Controls.Clear();
         switch (Mode)
         {
-            case 1: options.Controls.Add(date); break;
             case 2: options.Controls.AddRange([Caption("Output format"), format]); break;
             case 3: options.Controls.AddRange([Caption("Max width (px)"), width, Caption("Max height (px)"), height]); break;
             case 4: options.Controls.AddRange([Caption("Max file size (KB, 1 KB = 1,000 bytes)"), limit]); break;
@@ -191,7 +188,7 @@ internal sealed class Workspace : Form
             }
             else
             {
-                var settings = new Options(Mode, date.Checked, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
+                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
                 plan = await Task.Run(() => Operations.Preview(files, settings));
                 rows.Items.Clear();
                 foreach (var c in plan.Changes)

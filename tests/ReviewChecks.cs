@@ -94,10 +94,13 @@ internal static class ReviewChecks
                 throw new Exception("Date rename preview missing.");
             if (mode == 1)
             {
-                Descendants(form).OfType<CheckBox>().Single().Checked = true;
-                WaitFor(() => save.Enabled);
-                if (!Path.GetFileName(((Change)list.Items[0].Tag!).Target).StartsWith(Operations.Today + "_"))
-                    throw new Exception("Date option did not refresh.");
+                if (Descendants(form).OfType<CheckBox>().Any()) throw new Exception("The date should always be included.");
+                foreach (ListViewItem item in list.Items)
+                {
+                    var change = (Change)item.Tag!;
+                    string expected = $"{Operations.Today.Replace('-', '_')}_{change.Number:D3}{Path.GetExtension(change.Source)}";
+                    if (Path.GetFileName(change.Target) != expected) throw new Exception("Incorrect numbered rename preview.");
+                }
             }
             if (mode is 3 or 4)
             {

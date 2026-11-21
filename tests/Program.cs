@@ -31,7 +31,7 @@ internal static class Checks
             File.Copy(src, copy);
             var notes = new List<string>();
             Check(Operations.Duplicates([src], notes).Single().Value.Count == 2 && notes.Count == 0, "Folder duplicate scan");
-            var settings = new Options(2, false, "JPG", 80, 80, 5000);
+            var settings = new Options(2, "JPG", 80, 80, 5000);
             foreach (var (mode, format) in new[] { (2, "JPG"), (2, "WebP"), (2, "PNG"), (3, "PNG"), (4, "PNG") })
             {
                 using var plan = Operations.Preview([src], settings with { Action = mode, Format = format });
@@ -47,16 +47,29 @@ internal static class Checks
             using var conflict = Operations.Preview([src], settings);
             File.WriteAllText(conflict.Changes.Single().Target, "occupied");
             Check(Operations.Apply(conflict, 2).Done == 0 && File.ReadAllText(conflict.Changes.Single().Target) == "occupied", "Overwrite protection");
-            File.WriteAllText(Path.Combine(folder.FullName, "001.png"), "occupied");
+            string prefix = DateTime.Today.ToString("yyyy_MM_dd", System.Globalization.CultureInfo.InvariantCulture) + "_";
+            File.WriteAllText(Path.Combine(folder.FullName, prefix + "001.png"), "occupied");
             using var batch = Operations.Preview([src, copy], settings with { Action = 1 });
             using var stale = Operations.Preview([src], settings with { Action = 1 });
-            Check(batch.Changes.Select(c => Path.GetFileName(c.Target)).SequenceEqual(["002.png", "003.png"]), "Counter collision");
+            Check(batch.Changes.Select(c => Path.GetFileName(c.Target)).SequenceEqual([prefix + "002.png", prefix + "003.png"]), "Counter collision");
             Check(Operations.Apply(batch, 1).Done == 2, "Counter apply");
             try { Operations.Apply(stale, 1); throw new InvalidOperationException("Stale counter accepted"); } catch (IOException) { }
-            using var next = Operations.Preview([batch.Changes[0].Target], settings with { Action = 1, WithDate = true });
-            Check(Path.GetFileName(next.Changes.Single().Target) == Operations.Today + "_004.png", "Saved shared counter");
+            using var next = Operations.Preview([batch.Changes[0].Target], settings with { Action = 1 });
+            Check(Path.GetFileName(next.Changes.Single().Target) == prefix + "004.png", "Saved shared counter");
             using var dated = Operations.Preview([batch.Changes[0].Target], settings with { Action = 0 });
-            Check(Operations.Apply(dated, 0).Done == 1 && File.Exists(Path.Combine(folder.FullName, Operations.Today + "_002.png")), "Date rename");
+            Check(Operations.Apply(dated, 0).Done == 1 && File.Exists(Path.Combine(folder.FullName, Operations.Today + "_" + prefix + "002.png")), "Date rename");
+            string[] extensions = [".png", ".JPG", ".jpeg", ".webp", ".PNG"];
+            var mixed = extensions.Select((ext, i) => Path.Combine(folder.FullName, $"sample-{i}{ext}")).ToArray();
+            using (var img = new MagickImage(MagickColors.Blue, 8, 8))
+                foreach (var file in mixed) img.Write(file);
+            var originals = mixed.Select(File.ReadAllBytes).ToArray();
+            using var numbered = Operations.Preview(mixed, settings with { Action = 1 });
+            Check(Operations.Apply(numbered, 1).Done == mixed.Length, "Mixed-format numbered rename");
+            for (int i = 0; i < mixed.Length; i++)
+            {
+                string output = Path.Combine(folder.FullName, $"{prefix}{i + 4:D3}{extensions[i]}");
+                Check(File.ReadAllBytes(output).SequenceEqual(originals[i]), "Dated number, extension and file contents");
+            }
             Console.WriteLine("Passed conversion, resize, file size limit, duplicate scan, safe preview, collision and counter checks.");
         }
         finally

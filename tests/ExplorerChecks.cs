@@ -2,10 +2,11 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using ImageMagick;
+using ImageChecker;
 
 internal static class ExplorerChecks
 {
-    // Exercise Explorer's actual context menu for a mixed selection and invoke its Convert verb.
+    // Check the installed application's dropdown through each Explorer entry point.
     internal static void Run()
     {
         var dir = Directory.CreateTempSubdirectory("ImageChecker-explorer-");
@@ -20,14 +21,14 @@ internal static class ExplorerChecks
             image.Write(Path.Combine(second.FullName, "another.jpeg"));
             image.Write(Path.Combine(first.CreateSubdirectory("Nested").FullName, "nested.png"));
             File.WriteAllText(Path.Combine(first.FullName, "notes.txt"), "skip");
-            CheckConvert(paths, 2);
-            CheckConvert([first.FullName], 1);
-            CheckConvert([first.FullName, second.FullName], 2);
+            foreach (string action in Program.Actions) CheckAction(paths, 2, action);
+            CheckAction([first.FullName], 1, Program.Actions[1]);
+            CheckAction([first.FullName, second.FullName], 2, Program.Actions[2]);
         }
         finally { dir.Delete(true); }
     }
 
-    private static void CheckConvert(string[] selection, int expectedImages)
+    private static void CheckAction(string[] selection, int expectedImages, string action)
     {
         var pidls = new List<nint>();
         nint menu = 0;
@@ -46,19 +47,21 @@ internal static class ExplorerChecks
             nint sub = GetSubMenu(menu, Find(menu, "ImageChecker"));
             if (sub == 0) throw new Exception("Missing ImageChecker submenu");
             if (context is IContextMenu2 lazy) lazy.HandleMenuMsg(0x0117, sub, 0);
-            int convert = Find(sub, "Change file format");
+            int verb = Find(sub, action);
             if (GetMenuItemCount(sub) != 6) throw new Exception("Expected six ImageChecker verbs.");
             var old = Process.GetProcessesByName("ImageChecker").Select(p => p.Id).ToHashSet();
-            var info = new InvokeInfo { Size = Marshal.SizeOf<InvokeInfo>(), Verb = (nint)(GetMenuItemID(sub, convert) - 1), Show = 1 };
+            var info = new InvokeInfo { Size = Marshal.SizeOf<InvokeInfo>(), Verb = (nint)(GetMenuItemID(sub, verb) - 1), Show = 1 };
             context.InvokeCommand(ref info);
             for (int i = 0; i < 100; i++)
             {
                 foreach (var process in Process.GetProcessesByName("ImageChecker").Where(p => !old.Contains(p.Id)))
                 {
                     if (process.MainWindowTitle != $"ImageChecker — {expectedImages} selected") continue;
+                    bool currentLabels = HasActionDropdown(process.MainWindowHandle, action);
                     process.CloseMainWindow();
                     if (!process.WaitForExit(5000)) { process.CloseMainWindow(); process.WaitForExit(5000); }
-                    Console.WriteLine($"Explorer opened {expectedImages} image(s) from {string.Join(", ", selection.Select(Path.GetFileName))}.");
+                    if (!currentLabels) throw new Exception($"Incorrect dropdown labels or active action after opening {action}.");
+                    Console.WriteLine($"Verified dropdown via {action} on {expectedImages} image(s).");
                     return;
                 }
                 Thread.Sleep(150);
@@ -71,6 +74,31 @@ internal static class ExplorerChecks
             foreach (var ptr in pidls) Marshal.FreeCoTaskMem(ptr);
         }
     }
+    private static bool HasActionDropdown(nint window, string expectedAction)
+    {
+        bool matched = false;
+        EnumChildWindows(window, (child, _) =>
+        {
+            var className = new StringBuilder(256);
+            GetClassName(child, className, className.Capacity);
+            if (!className.ToString().Contains("COMBOBOX", StringComparison.OrdinalIgnoreCase)) return true;
+            if ((int)SendMessage(child, 0x146, 0, 0) != Program.Actions.Length) return true; // CB_GETCOUNT
+            for (int i = 0; i < Program.Actions.Length; i++)
+            {
+                var label = new StringBuilder(256);
+                SendMessage(child, 0x148, i, label); // CB_GETLBTEXT
+                if (label.ToString() != Program.Actions[i]) return true;
+            }
+            matched = (int)SendMessage(child, 0x147, 0, 0) == Array.IndexOf(Program.Actions, expectedAction);
+            return !matched;
+        }, 0);
+        return matched;
+    }
+    private delegate bool EnumChildProc(nint child, nint parameter);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(nint parent, EnumChildProc callback, nint parameter);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint window, StringBuilder value, int size);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint SendMessage(nint window, uint message, nint index, nint value);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint SendMessage(nint window, uint message, nint index, StringBuilder value);
     private static int Find(nint menu, string text)
     {
         var names = new List<string>();

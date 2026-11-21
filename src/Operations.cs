@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 
 namespace ImageChecker;
 
-internal record Options(int Action, bool WithDate, string Format, int Width, int Height, long ByteLimit);
+internal record Options(int Action, string Format, int Width, int Height, long ByteLimit);
 internal record Stamp(long Length, DateTime Modified)
 {
     internal static Stamp Read(string path)
@@ -57,6 +57,7 @@ internal static class Operations
         {
             int number = options.Action == 1 ? Locked(k => (int)(k.GetValue(plan.Day) ?? 0)) : 0;
             plan.CounterStart = number;
+            string numberPrefix = plan.Day.Replace('-', '_') + "_";
             var used = new HashSet<string>(Names);
             foreach (var src in paths.Distinct(Names))
             {
@@ -74,7 +75,7 @@ internal static class Operations
                         do
                         {
                             number = checked(number + 1);
-                            target = Path.Combine(directory, $"{(options.WithDate ? plan.Day + "_" : "")}{number:D3}{ext}");
+                            target = Path.Combine(directory, $"{numberPrefix}{number:D3}{ext}");
                             if (!Taken(target, used)) break;
                             collision = true;
                         } while (true);
