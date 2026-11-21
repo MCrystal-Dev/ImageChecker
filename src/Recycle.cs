@@ -6,8 +6,8 @@ internal static class Recycle
 {
     internal static void FileToBin(string path, nint owner)
     {
-        Guid shellItem = new("43826D1E-E718-42EE-BC55-A1E261C37BFE");
-        SHCreateItemFromParsingName(path, 0, ref shellItem, out object item);
+        Guid shellItem = typeof(IShellItem).GUID;
+        SHCreateItemFromParsingName(path, 0, ref shellItem, out IShellItem item);
         var op = (IFileOperation)Activator.CreateInstance(Type.GetTypeFromCLSID(new("3AD05575-8857-4850-9277-11B85BDB8E09"))!)!;
         try
         {
@@ -22,7 +22,10 @@ internal static class Recycle
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    private static extern void SHCreateItemFromParsingName(string path, nint bind, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object item);
+    private static extern void SHCreateItemFromParsingName(string path, nint bind, ref Guid iid, out IShellItem item);
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem { }
 
     [ComImport, Guid("947AAB5F-0A5C-4C13-B4D6-4BF7836FC9F8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IFileOperation
@@ -42,7 +45,7 @@ internal static class Recycle
         void MoveItems(nint items, nint folder);
         void CopyItem(nint item, nint folder, nint name, nint sink);
         void CopyItems(nint items, nint folder);
-        void DeleteItem([MarshalAs(UnmanagedType.Interface)] object item, nint sink);
+        void DeleteItem(IShellItem item, nint sink);
         void DeleteItems(nint items);
         void NewItem(nint folder, uint attributes, nint name, nint template, nint sink);
         void PerformOperations();

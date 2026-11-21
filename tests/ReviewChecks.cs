@@ -13,40 +13,65 @@ internal static class ReviewChecks
             string first = Path.Combine(dir.FullName, "original.png"), second = Path.Combine(dir.FullName, "copy.png");
             using (var image = new MagickImage(MagickColors.Green, 20, 20)) image.Write(first);
             File.Copy(first, second);
-            using var form = new Workspace([first], 5);
+            string third = Path.Combine(dir.FullName, "third.webp");
+            using (var image = new MagickImage(first)) { image.Resize(40, 40); image.Write(third); }
+            using var form = new Workspace([first, second, third], 5);
             form.Show();
-            var list = Descendants(form).OfType<ListView>().Single();
-            var review = Descendants(form).OfType<Button>().Single(b => b.Text.StartsWith("Review removal"));
-            var refresh = Descendants(form).OfType<Button>().Single(b => b.Text == "Refresh");
-            var deadline = DateTime.UtcNow.AddSeconds(15);
-            while ((list.Items.Count != 2 || !refresh.Enabled) && DateTime.UtcNow < deadline)
+            var controls = Descendants(form).ToArray();
+            var keep = controls.OfType<Button>().Single(b => b.Text == "Keep both");
+            var left = controls.OfType<Button>().Single(b => b.Text == "Delete Left");
+            var right = controls.OfType<Button>().Single(b => b.Text == "Delete Right");
+            var refresh = controls.OfType<Button>().Single(b => b.Text == "Refresh");
+            var pictures = controls.OfType<PictureBox>().OrderBy(box => box.PointToScreen(Point.Empty).X).ToArray();
+            void Ready()
             {
-                Application.DoEvents(); Thread.Sleep(20);
+                Application.DoEvents();
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                while (!refresh.Enabled && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(10); }
+                if (!refresh.Enabled) throw new Exception("Duplicate review timed out.");
             }
-            if (list.Items.Count != 2 || review.Enabled) throw new Exception("Duplicate review initial state failed");
-            Descendants(form).OfType<Button>().Single(b => b.Text == "Select all").PerformClick();
-            Application.DoEvents();
-            if (list.SelectedItems.Count != 2 || list.CheckedItems.Count != 0 || review.Enabled)
-                throw new Exception("Select all must highlight duplicates without marking them for recycling.");
-            list.Items[0].Checked = true;
-            Application.DoEvents();
-            if (!review.Enabled) throw new Exception("Review button did not enable.");
-            using var timer = new System.Windows.Forms.Timer { Interval = 100 };
-            bool sawPath = false;
-            timer.Tick += (_, _) =>
+            void Confirm(Action choose, string path, bool accept)
             {
-                var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f != form);
-                if (dialog == null) return;
-                timer.Stop();
-                var paths = Descendants(dialog).OfType<TextBox>().Single().Lines;
-                sawPath = paths.Length == 1 && (paths[0] == first || paths[0] == second);
-                dialog.DialogResult = DialogResult.Cancel;
-            };
-            timer.Start();
-            review.PerformClick();
-            if (!sawPath || !File.Exists(first) || !File.Exists(second)) throw new Exception("Cancellation did not preserve both files");
+                bool sawPath = false;
+                using var timer = new System.Windows.Forms.Timer { Interval = 50 };
+                timer.Tick += (_, _) =>
+                {
+                    var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f != form);
+                    if (dialog == null) return;
+                    timer.Stop();
+                    sawPath = Descendants(dialog).OfType<TextBox>().Single().Lines.SequenceEqual([path]);
+                    dialog.DialogResult = accept ? DialogResult.OK : DialogResult.Cancel;
+                };
+                timer.Start();
+                choose();
+                if (!sawPath) throw new Exception("Wrong file in the delete confirmation.");
+                Ready();
+            }
+            void ClickPicture(PictureBox box)
+            {
+                PostMessage(box.Handle, 0x201, 1, 0x000a000a);
+                PostMessage(box.Handle, 0x202, 0, 0x000a000a);
+                Application.DoEvents();
+            }
+            Ready();
+            if (!keep.Enabled || !left.Enabled || !right.Enabled || pictures.Any(box => box.Image == null))
+                throw new Exception("Pair was not automatically displayed.");
+            Confirm(() => ClickPicture(pictures[0]), second, false);
+            Confirm(right.PerformClick, first, false);
+            keep.PerformClick();
+            Ready();
+            if (!File.Exists(first) || !File.Exists(second) || !File.Exists(third)) throw new Exception("Keep both modified files.");
+            Confirm(left.PerformClick, second, true);
+            if (File.Exists(second) || !File.Exists(third)) throw new Exception("Delete Left recycled the wrong file.");
+            Confirm(() => ClickPicture(pictures[1]), third, true);
+            if (File.Exists(third) || !File.Exists(first) || keep.Enabled || left.Enabled || right.Enabled)
+                throw new Exception("Delete Right or end of queue failed.");
+            refresh.PerformClick();
+            Ready();
+            if (!controls.OfType<Label>().Any(l => l.Visible && l.Text == "No matching pairs found"))
+                throw new Exception("Missing no-match result.");
             form.Close();
-            Console.WriteLine("Duplicate review listed the exact selected path. Cancelling preserved both files.");
+            Console.WriteLine("Pair review, keep, cancel, both delete sides, image clicks and Recycle Bin checks passed.");
             CheckFormatSwitch(dir);
         }
         finally { dir.Delete(true); }
@@ -94,15 +119,13 @@ internal static class ReviewChecks
         foreach (int mode in new[] { 0, 1, 3, 4, 5, 2 })
         {
             action.SelectedIndex = mode;
-            CheckRows();
+            if (mode != 5) CheckRows();
             if (overwrite.Visible != (mode is 2 or 3 or 4)) throw new Exception("Overwrite visible for wrong action.");
             if (mode == 5)
             {
-                if (save.Enabled || list.Items.Cast<ListViewItem>().Count(i => i.Tag is (string, string)) != 2)
-                    throw new Exception("Incorrect duplicate groups or removal enabled without a selection.");
-                list.SelectedItems[0].Checked = true;
-                Application.DoEvents();
-                if (save.Enabled || list.CheckedItems.Count != 0) throw new Exception("An unmatched file could be checked.");
+                WaitFor(() => refresh.Enabled);
+                if (save.Visible || list.Visible || !controls.OfType<Button>().Single(b => b.Text == "Keep both").Enabled)
+                    throw new Exception("Duplicate pair review was not displayed.");
                 continue;
             }
             if (!save.Enabled) throw new Exception($"Action {mode} did not refresh automatically.");

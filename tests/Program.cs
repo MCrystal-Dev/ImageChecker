@@ -46,8 +46,19 @@ internal static class Checks
             using (var img = new MagickImage(pixels, new PixelReadSettings(320, 240, StorageType.Char, PixelMapping.RGB))) img.Write(src);
             string copy = Path.Combine(folder.FullName, "second.png");
             File.Copy(src, copy);
-            var notes = new List<string>();
-            Check(Operations.Duplicates([src], notes).Single().Value.Count == 2 && notes.Count == 0, "Folder duplicate scan");
+            string converted = Path.Combine(folder.FullName, "small.jpg");
+            using (var image = new MagickImage(src)) { image.Resize(160, 120); image.Quality = 76; image.Write(converted); }
+            using (var blue = new MagickImage(MagickColors.Blue, 320, 240)) blue.Write(Path.Combine(folder.FullName, "blue.png"));
+            var review = new DuplicateReview([src]);
+            Check(review.Current is { Exact: true } && review.Current.Right.Path == copy && review.Notes.Count == 0, "Exact copies first: " + string.Join("\n", review.Notes));
+            review.Advance();
+            var similar = review.Current;
+            Check(similar is { Exact: false } && similar.Right.Path == converted, "Resized and re-encoded match");
+            File.WriteAllText(converted, "changed");
+            try { similar!.RecycleSide(true, 0); throw new Exception("Accepted a changed keeper"); } catch (IOException) { }
+            try { similar!.RecycleSide(false, 0); throw new Exception("Accepted a changed target"); } catch (IOException) { }
+            review.Advance();
+            Check(review.Current == null && File.Exists(src) && File.Exists(converted), "Unrelated image or unsafe recycle");
             var settings = new Options(2, "JPG", 80, 80, 5000);
             foreach (var (mode, format) in new[] { (2, "JPG"), (2, "WebP"), (2, "PNG"), (3, "PNG"), (4, "PNG") })
             {

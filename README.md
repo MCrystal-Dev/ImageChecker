@@ -7,7 +7,7 @@ ImageChecker adds a right-click menu to Windows File Explorer for working with o
 1. Download **ImageChecker-win-x64.zip** from the [latest release](https://github.com/MCrystal-Dev/ImageChecker/releases/latest).
 2. Extract the entire ZIP to a folder you want to keep, then double-click **Enable Explorer Menu.cmd**. It registers the menu for your Windows account.
 3. Right-click one or more images or folders in File Explorer. On Windows 11, choose **Show more options → ImageChecker**. Selecting folders includes PNG, JPG/JPEG, and WebP files directly inside each selected folder. To process images in a subfolder, select that subfolder itself.
-4. The images start selected. Click one row, Ctrl-click to toggle individual images, Shift-click to select a range, or use **Select all** in the bottom bar or Ctrl+A to highlight every row. **Rename**, **Export copies** and **Overwrite** apply to the highlighted images. Numbered renames allocate numbers in list order. The preview updates automatically when you change the action or its settings. For duplicate removal, check the copies to recycle and click **Review removal**.
+4. The images start selected. Click one row, Ctrl-click to toggle individual images, Shift-click to select a range, or use **Select all** in the bottom bar or Ctrl+A to highlight every row. **Rename**, **Export copies** and **Overwrite** apply to the highlighted images. Numbered renames allocate numbers in list order. The preview updates automatically when you change the action or its settings. Choose **Find duplicates** to review matching pairs.
 
 You can also double-click **ImageChecker.exe** and select images from the file picker. The download includes the .NET runtime and runs on x64 Windows 10 and 11. To remove the menu, run **Remove Explorer Menu.cmd**. If you move the extracted folder, run **Enable Explorer Menu.cmd** from its new location.
 
@@ -20,13 +20,13 @@ You can also double-click **ImageChecker.exe** and select images from the file p
 | Change file format | Converts images to PNG, JPG or WebP. Transparent pixels use a white background when converting to JPG. |
 | Resize by dimensions | Fits within the chosen width and height in pixels, preserving proportions and avoiding enlargement. |
 | Resize to a file size limit | Creates a copy at or below the chosen number of KB (1 KB = 1,000 bytes). Shows the resulting dimensions and exact byte count before saving. For larger files it can reduce encoding quality, strip metadata, and shrink the image. |
-| Find duplicates | Scans the selected images' immediate folders for byte-identical files matching the selection. Compare images side by side, check individual copies, and review the full paths before moving them to the Recycle Bin. At least one copy in each group must be kept. |
+| Find duplicates | Compares the selected images with images in their immediate folders. Exact copies appear first, followed by visually similar pairs. Choose **Keep both** to advance, or choose **Delete Left**, **Delete Right**, or click an image. Confirm the displayed path to move that image to the Recycle Bin. |
 
 **Export copies** keeps the originals and creates a new folder named `ImageChecker Export`, then `ImageChecker Export (2)`, and so on. When you open images from several folders together, the export folder goes beside the first source image in the list. Copies use a suffix such as `-resized`.
 
 **Overwrite** permanently replaces the selected originals with the previewed images. Review the paths and click **OK** to proceed or **Cancel** to keep the originals. Format changes keep the base name and use the new format's extension. If that name is already occupied by another file, ImageChecker skips that replacement and reports it.
 
-Image export supports still images. Duplicate matching uses file bytes, so edited or re-encoded versions can appear as separate images.
+Image export supports still images. Visual matching compares the proportions, colors and transparency of still images to find resized or re-encoded copies. Animated images are compared by exact file contents.
 
 ## Build
 

@@ -75,16 +75,6 @@ internal static class Appearance
             e.Graphics.FillRectangle(marker, bounds.X, bounds.Y, 3, bounds.Height);
         }
         bounds.Inflate(-6, 0);
-        if (e.ColumnIndex == 0 && sender is ListView { CheckBoxes: true })
-        {
-            var state = e.Item.Checked ? System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal
-                : System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
-            var glyph = CheckBoxRenderer.GetGlyphSize(e.Graphics, state);
-            int x = e.Bounds.X + 3;
-            CheckBoxRenderer.DrawCheckBox(e.Graphics, new Point(x, bounds.Y + (bounds.Height - glyph.Height) / 2), state);
-            int start = x + glyph.Width + 5;
-            bounds = Rectangle.FromLTRB(start, bounds.Top, Math.Max(start, bounds.Right), bounds.Bottom);
-        }
         Color ink = e.Item.ForeColor == Warning ? Warning : e.ColumnIndex == 2 ? Secondary : Text;
         TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.Item.Font, bounds, ink,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);

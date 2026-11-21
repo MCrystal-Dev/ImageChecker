@@ -8,7 +8,7 @@ internal sealed class Workspace : Form
     {
         internal ImageListView() => DoubleBuffered = true;
     }
-    private readonly string[] files;
+    private string[] files;
     private readonly ComboBox action = Choice(Program.Actions);
     private readonly ComboBox format = Choice(["PNG", "JPG", "WebP"]);
     private readonly NumericUpDown width = Number(1920, 100000), height = Number(1080, 100000), limit = Number(500, 1000000);
@@ -16,6 +16,7 @@ internal sealed class Workspace : Form
     private readonly Control[][] optionFields;
     private readonly ListView rows = new ImageListView { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
     private readonly PictureBox before = Picture(), after = Picture();
+    private readonly ToolTip fileTips = new();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
@@ -24,8 +25,13 @@ internal sealed class Workspace : Form
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
     private readonly Button apply = new() { Text = "Apply", AutoSize = true, Enabled = false };
     private readonly Button overwrite = new() { Text = "Overwrite", AutoSize = true, Enabled = false };
+    private readonly Button keepBoth = new() { Text = "Keep both", AutoSize = true };
+    private readonly Button deleteLeft = new() { Text = "Delete Left", AutoSize = true };
+    private readonly Button deleteRight = new() { Text = "Delete Right", AutoSize = true };
+    private readonly Label reviewMessage = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Appearance.Secondary };
+    private readonly RowStyle imageListHeight = new(SizeType.Percent, 48);
     private Plan? plan;
-    private Dictionary<string, List<string>> groups = [];
+    private DuplicateReview? review;
     private bool busy;
     private bool previewPending;
     private bool selectionPending;
@@ -42,7 +48,7 @@ internal sealed class Workspace : Form
         MinimumSize = new(780, 570); Size = new(1060, 735);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new(16) };
         layout.ColumnStyles.Add(new(SizeType.Percent, 100));
-        foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 48), new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
+        foreach (var style in new[] { new RowStyle(SizeType.AutoSize), imageListHeight, new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
         var toolbar = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
@@ -54,7 +60,7 @@ internal sealed class Workspace : Form
             [Caption("Output format"), format],
             [Caption("Max width (px)"), width, Caption("Max height (px)"), height],
             [Caption("Max file size (KB, 1 KB = 1,000 bytes)"), limit],
-            [Caption("Check the copies to recycle. Keep at least one image in each group.")]
+            []
         ];
         foreach (var fields in optionFields) options.Controls.AddRange(fields);
         toolbar.Controls.AddRange([Caption("Action"), action, options]);
@@ -83,15 +89,22 @@ internal sealed class Workspace : Form
         compare.RowStyles.Add(new(SizeType.Percent, 100));
         compare.Controls.Add(PreviewPanel(leftRole, leftTitle, before, new(0, 0, 5, 0)), 0, 0);
         compare.Controls.Add(PreviewPanel(rightRole, rightTitle, after, new(5, 0, 0, 0)), 1, 0);
-        layout.Controls.Add(compare, 0, 2);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 5, Margin = new(0, 10, 0, 0) };
+        var viewer = new Panel { Dock = DockStyle.Fill, Margin = new(0, 12, 0, 0) };
+        viewer.Controls.Add(compare);
+        viewer.Controls.Add(reviewMessage);
+        reviewMessage.BringToFront();
+        layout.Controls.Add(viewer, 0, 2);
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 8, Margin = new(0, 10, 0, 0) };
         status.ForeColor = Appearance.Secondary;
         Appearance.StyleButton(preview);
         Appearance.StyleButton(selectAll);
         Appearance.StyleButton(overwrite);
         Appearance.StyleButton(apply, primary: true);
+        Appearance.StyleButton(keepBoth, primary: true);
+        Appearance.StyleButton(deleteLeft);
+        Appearance.StyleButton(deleteRight);
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
-        foreach (Button button in new[] { selectAll, preview, overwrite, apply })
+        foreach (Button button in new[] { selectAll, preview, overwrite, apply, deleteLeft, keepBoth, deleteRight })
         {
             footer.ColumnStyles.Add(new(SizeType.AutoSize));
             footer.Controls.Add(button, footer.ColumnStyles.Count - 1, 0);
@@ -125,22 +138,18 @@ internal sealed class Workspace : Form
             SelectAllRows();
             e.SuppressKeyPress = true;
         };
-        rows.ItemCheck += (_, e) =>
-        {
-            if (busy) e.NewValue = e.CurrentValue;
-            else if (Mode == 5 && rows.Items[e.Index].Tag is not ValueTuple<string, string>) e.NewValue = CheckState.Unchecked;
-        };
-        rows.ItemChecked += (_, _) =>
-        {
-            if (Mode == 5) BeginInvoke(() => { if (Mode == 5) apply.Enabled = !busy && rows.CheckedItems.Count > 0; });
-        };
+        keepBoth.Click += async (_, _) => await DecidePair(null);
+        deleteLeft.Click += async (_, _) => await DecidePair(true);
+        deleteRight.Click += async (_, _) => await DecidePair(false);
+        before.Click += async (_, _) => await DecidePair(true);
+        after.Click += async (_, _) => await DecidePair(false);
         preview.Click += async (_, _) => await Preview();
         apply.Click += async (_, _) => await Apply();
         overwrite.Click += async (_, _) => await Apply(replaceOriginals: true);
         Configure();
         Shown += async (_, _) => await Preview();
         FormClosing += (_, e) => e.Cancel = busy;
-        FormClosed += (_, _) => { editDelay.Dispose(); ClearPictures(); plan?.Dispose(); };
+        FormClosed += (_, _) => { editDelay.Dispose(); fileTips.Dispose(); ClearPictures(); plan?.Dispose(); };
     }
     private void SelectAllRows()
     {
@@ -176,12 +185,18 @@ internal sealed class Workspace : Form
         for (int mode = 0; mode < optionFields.Length; mode++)
             foreach (var field in optionFields[mode]) field.Visible = Mode == mode;
         options.ResumeLayout(true);
-        leftRole.Text = Mode == 5 ? "Selected image" : "Original";
-        rightRole.Text = Mode == 5 ? "Matching copy" : "Preview";
-        rows.Columns[1].Text = Mode == 5 ? "Folder" : "Output";
-        rows.Columns[2].Text = Mode == 5 ? "Duplicate group" : "Details";
+        bool comparing = Mode == 5;
+        fileTips.RemoveAll();
+        imageListHeight.Height = comparing ? 0 : 48;
+        rows.Visible = selectAll.Visible = apply.Visible = !comparing;
+        keepBoth.Visible = deleteLeft.Visible = deleteRight.Visible = comparing;
+        before.Cursor = after.Cursor = comparing ? Cursors.Hand : Cursors.Default;
+        reviewMessage.Visible = comparing;
+        reviewMessage.Text = "Looking for matches…";
+        leftRole.Text = comparing ? "Left" : "Original";
+        rightRole.Text = comparing ? "Right" : "Preview";
         overwrite.Visible = Mode is 2 or 3 or 4;
-        apply.Text = Mode == 5 ? "Review removal…" : Mode <= 1 ? "Rename" : "Export copies";
+        apply.Text = Mode <= 1 ? "Rename" : "Export copies";
     }
     private void QueueNumericPreview()
     {
@@ -199,13 +214,27 @@ internal sealed class Workspace : Form
     private void Reset()
     {
         selectAll.Enabled = false;
-        rows.Items.Clear(); rows.Groups.Clear(); groups.Clear();
+        rows.Items.Clear(); review = null;
         ClearPictures(); plan?.Dispose(); plan = null; apply.Enabled = overwrite.Enabled = false;
         status.Text = "Preview the selected action.";
     }
     private void ShowPair()
     {
         ClearPictures();
+        if (Mode == 5)
+        {
+            if (review?.Current is {} pair)
+            {
+                leftTitle.Text = Path.GetFileName(pair.Left.Path);
+                rightTitle.Text = Path.GetFileName(pair.Right.Path);
+                leftRole.Text = $"Left · {pair.Left.Details}";
+                rightRole.Text = $"Right · {pair.Right.Details}";
+                fileTips.SetToolTip(leftTitle, pair.Left.Path);
+                fileTips.SetToolTip(rightTitle, pair.Right.Path);
+                Thumb(before, pair.Left.Path); Thumb(after, pair.Right.Path);
+            }
+            return;
+        }
         var active = ActiveRow();
         if (active?.Tag is string source)
         {
@@ -216,12 +245,6 @@ internal sealed class Workspace : Form
         {
             leftTitle.Text = Path.GetFileName(c.Source); rightTitle.Text = Path.GetFileName(c.Target);
             Thumb(before, c.Source); Thumb(after, c.Staged ?? c.Source);
-        }
-        else if (active?.Tag is ValueTuple<string, string> pair)
-        {
-            string other = groups[pair.Item1].First(p => p != pair.Item2);
-            leftTitle.Text = Path.GetFileName(pair.Item2); rightTitle.Text = Path.GetFileName(other);
-            Thumb(before, pair.Item2); Thumb(after, other);
         }
     }
     private ListViewItem? ActiveRow() => rows.FocusedItem is { Selected: true } focused
@@ -258,7 +281,7 @@ internal sealed class Workspace : Form
         try
         {
             using var image = new MagickImage(path, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
-            image.AutoOrient(); image.Thumbnail(480, 260);
+            image.AutoOrient(); image.Thumbnail((uint)Math.Max(1, box.ClientSize.Width), (uint)Math.Max(1, box.ClientSize.Height));
             using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
             using var decoded = new Bitmap(stream); box.Image = new Bitmap(decoded);
         }
@@ -272,7 +295,8 @@ internal sealed class Workspace : Form
         preview.Enabled = !on;
         selectAll.Enabled = !on && rows.Items.Count > 0;
         overwrite.Enabled = false;
-        apply.Enabled = !on && Mode == 5 && rows.CheckedItems.Count > 0;
+        apply.Enabled = false;
+        keepBoth.Enabled = deleteLeft.Enabled = deleteRight.Enabled = !on && Mode == 5 && review?.Current != null;
         if (!on) UpdateSelection();
     }
     private async Task Preview(HashSet<string>? selection = null)
@@ -283,7 +307,7 @@ internal sealed class Workspace : Form
         status.Text = "Preparing preview…";
         try
         {
-            if (rows.Items.Count == 0)
+            if (rows.Items.Count == 0 && Mode != 5)
             {
                 rows.Items.AddRange(files.Select(source => new ListViewItem([Path.GetFileName(source), "", "Preparing preview…"]) { Tag = source, ToolTipText = source }).ToArray());
                 RestoreSelection(selection ?? files.ToHashSet(Operations.Names), null);
@@ -295,39 +319,32 @@ internal sealed class Workspace : Form
                 var notes = new List<string>();
                 var items = new List<ListViewItem>();
                 plan?.Dispose(); plan = null;
+                review = null;
                 if (Mode == 5)
                 {
-                    groups = await Task.Run(() => Operations.Duplicates(files, notes));
+                    reviewMessage.Visible = true;
+                    reviewMessage.Text = "Looking for matches…";
+                    var scanned = await Task.Run(() => new DuplicateReview(files));
                     if (previewPending) continue;
-                    int n = 0;
-                    foreach (var (hash, paths) in groups)
-                    {
-                        string group = $"Match {++n} · {paths.Count} identical files";
-                        foreach (var path in paths)
-                            items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, group]) { Tag = (hash, path), ToolTipText = path });
-                    }
-                    foreach (var path in files.Except(groups.Values.SelectMany(paths => paths), Operations.Names))
-                        items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"]) { Tag = path, ToolTipText = path });
-                    status.Text = $"{groups.Count} duplicate group{(groups.Count == 1 ? "" : "s")}";
+                    review = scanned;
+                    UpdateReviewStatus();
+                    break;
                 }
-                else
-                {
-                    var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
-                    plan = await Task.Run(() => Operations.Preview(files, settings));
-                    if (previewPending) continue;
-                    foreach (var c in plan.Changes)
-                        items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
-                    notes.AddRange(plan.Notes);
-                }
+                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
+                plan = await Task.Run(() => Operations.Preview(files, settings));
+                if (previewPending) continue;
+                foreach (var c in plan.Changes)
+                    items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
+                notes.AddRange(plan.Notes);
                 foreach (var note in notes) items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
                 if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
-                var highlighted = selection ?? rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names);
+                var highlighted = selection ?? (rows.Items.Count == 0 ? files.ToHashSet(Operations.Names)
+                    : rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names));
                 string? focusedSource = SourceOf(ActiveRow());
                 rows.BeginUpdate();
                 try
                 {
                     rows.Items.Clear();
-                    rows.CheckBoxes = Mode == 5;
                     rows.Items.AddRange(items.ToArray());
                     RestoreSelection(highlighted, focusedSource);
                 }
@@ -353,14 +370,13 @@ internal sealed class Workspace : Form
     private static string? SourceOf(ListViewItem? item) => item?.Tag switch
     {
         Change change => change.Source,
-        ValueTuple<string, string> match => match.Item2,
         string path => path,
         _ => null
     };
     private async Task Apply(bool replaceOriginals = false)
     {
         if (busy) return;
-        if (Mode == 5) { RemoveCopies(); return; }
+        if (Mode == 5) return;
         if (plan == null || selectionPending || editDelay.Enabled) return;
         var selected = rows.SelectedItems.Cast<ListViewItem>().OrderBy(item => item.Index)
             .Select(item => item.Tag).OfType<Change>().ToArray();
@@ -398,36 +414,43 @@ internal sealed class Workspace : Form
         catch (Exception ex) { Reset(); status.Text = ex.Message; }
         finally { if (!IsDisposed && busy) Working(false); }
     }
-    private void RemoveCopies()
+    private void UpdateReviewStatus()
     {
-        var selected = rows.CheckedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<(string Hash, string Path)>().ToArray();
-        if (selected.Length == 0) return;
-        var targets = selected.Select(s => s.Path).ToHashSet(Operations.Names);
-        if (selected.Any(s => groups[s.Hash].All(targets.Contains)))
+        var pair = review?.Current;
+        reviewMessage.Visible = pair == null;
+        reviewMessage.Text = review?.Reviewed > 0 ? "Review complete" : "No matching pairs found";
+        status.Text = pair != null ? $"{(pair.Exact ? "Exact copies" : "Visually similar")} · Click an image to choose it for deletion."
+            : $"{review?.Reviewed ?? 0} pairs reviewed.";
+        if (review?.Notes.Count > 0) status.Text += $" · {review.Notes.Count} scan warnings";
+        fileTips.SetToolTip(status, review == null ? "" : string.Join(Environment.NewLine, review.Notes.Take(5)));
+    }
+
+    private async Task DecidePair(bool? deleteLeftSide)
+    {
+        if (busy || Mode != 5 || review?.Current is not {} pair) return;
+        if (deleteLeftSide.HasValue)
         {
-            MessageBox.Show(this, "Uncheck at least one file in each group to keep it.", "Keep a copy"); return;
+            var target = deleteLeftSide.Value ? pair.Left : pair.Right;
+            string side = deleteLeftSide.Value ? "left" : "right";
+            if (!Details($"Delete the {side} image?", [target.Path], "Move to Recycle Bin",
+                $"Move the {side} image to the Recycle Bin? The other image will be kept.")) return;
         }
-        if (!Details("Move these files to the Recycle Bin?", targets, "Move to Recycle Bin")) return;
-        var errors = new List<string>();
-        int done = 0;
-        foreach (var batch in selected.GroupBy(s => s.Hash))
+        Working(true);
+        try
         {
-            try
+            string? recycled = null;
+            if (deleteLeftSide is bool left)
             {
-                string keeper = groups[batch.Key].First(p => !targets.Contains(p));
-                using var lockedKeeper = File.OpenRead(keeper);
-                if (Operations.Hash(lockedKeeper) != batch.Key) throw new IOException("The copy to keep has changed.");
-                foreach (var (_, path) in batch)
-                {
-                    using var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-                    if (Operations.Hash(locked) != batch.Key) throw new IOException($"{path} has changed.");
-                    Recycle.FileToBin(path, Handle); done++;
-                }
+                pair.RecycleSide(left, Handle);
+                recycled = left ? pair.Left.Path : pair.Right.Path;
+                files = files.Where(path => !Operations.Names.Equals(path, recycled)).ToArray();
+                Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
             }
-            catch (Exception ex) { errors.Add(ex.Message); }
+            await Task.Run(() => review.Advance(recycled));
+            UpdateReviewStatus();
         }
-        Reset(); status.Text = $"{done} files moved to the Recycle Bin.";
-        if (errors.Count > 0) Details("Some copies could not be recycled", errors);
+        catch (Exception ex) { Details("Could not complete review", [ex.Message]); }
+        finally { Working(false); }
     }
     private bool Details(string title, IEnumerable<string> lines, string? confirm = null, string? warning = null)
     {

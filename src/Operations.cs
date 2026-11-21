@@ -260,33 +260,4 @@ internal static class Operations
     }
 
     internal static string Hash(Stream input) => Convert.ToHexString(SHA256.HashData(input));
-    internal static Dictionary<string, List<string>> Duplicates(string[] selected, List<string> notes)
-    {
-        var selectedSet = selected.ToHashSet(Names);
-        var sizes = new HashSet<long>();
-        foreach (var path in selectedSet)
-            try { sizes.Add(new FileInfo(path).Length); } catch (Exception ex) { notes.Add($"{path} — {ex.Message}"); }
-        var groups = new Dictionary<string, List<string>>();
-        foreach (var dir in selected.Select(p => Path.GetDirectoryName(p)!).Distinct(Names))
-        {
-            try
-            {
-                foreach (var path in Directory.EnumerateFiles(dir).Where(Program.Supported))
-                {
-                    try
-                    {
-                        var entry = new FileInfo(path);
-                        if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint) || !sizes.Contains(entry.Length)) continue;
-                        using var stream = File.OpenRead(path);
-                        var hash = Hash(stream);
-                        if (!groups.TryGetValue(hash, out var group)) groups[hash] = group = [];
-                        group.Add(path);
-                    }
-                    catch (Exception ex) { notes.Add($"{path} — {ex.Message}"); }
-                }
-            }
-            catch (Exception ex) { notes.Add($"{dir} — {ex.Message}"); }
-        }
-        return groups.Where(g => g.Value.Count > 1 && g.Value.Any(selectedSet.Contains)).ToDictionary();
-    }
 }
