@@ -2,7 +2,7 @@ namespace ImageChecker;
 
 internal static class Program
 {
-    internal static readonly string[] Actions = ["Rename with today's date", "Rename with daily counter", "Change file format", "Resize by dimensions", "Resize to a file size limit", "Find duplicates"];
+    internal static readonly string[] Actions = ["Rename with today's date", "Rename with iterating number", "Change file format", "Resize by dimensions", "Resize to a file size limit", "Find duplicates"];
     internal static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp"];
     internal static bool Supported(string path) => Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 

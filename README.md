@@ -16,7 +16,7 @@ You can also double-click **ImageChecker.exe** and select images from the file p
 | Action | Result |
 | --- | --- |
 | Rename with today's date | Adds the local date to each original name, for example `2026-11-20_beach.jpg`. |
-| Rename with daily counter | Produces `001.jpg`, `002.jpg`, etc. Select **Include today's date** for `2026-11-20_001.jpg`. Both styles share a counter across folders and app restarts. It starts at 001 each local day, skips occupied names and records successful renames. |
+| Rename with iterating number | Produces `001.jpg`, `002.jpg`, etc. Select **Include today's date** for `2026-11-20_001.jpg`. Both styles share a counter across folders and app restarts. It starts at 001 each local day, skips occupied names and records successful renames. |
 | Change file format | Writes PNG, JPG or WebP copies beside the originals. Transparent pixels use a white background when exporting to JPG. |
 | Resize by dimensions | Fits within the chosen width and height in pixels, preserving proportions and avoiding enlargement. |
 | Resize to a file size limit | Creates a copy at or below the chosen number of KB (1 KB = 1,000 bytes). Shows the resulting dimensions and exact byte count before saving. For larger files it can reduce encoding quality, strip metadata, and shrink the image. |
