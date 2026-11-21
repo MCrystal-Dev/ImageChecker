@@ -48,8 +48,12 @@ internal static class ReviewChecks
     private static void CheckFormatSwitch(DirectoryInfo dir)
     {
         string[] files = Enumerable.Range(0, 8).Select(i => Path.Combine(dir.FullName, $"batch-{i}.png")).ToArray();
-        using (var image = new MagickImage(MagickColors.Coral, 32, 16))
-            foreach (string file in files) image.Write(file);
+        for (int i = 0; i < files.Length - 1; i++)
+        {
+            using var image = new MagickImage(MagickColors.Coral, (uint)(32 + i), 16);
+            image.Write(files[i]);
+        }
+        File.Copy(files[0], files[^1]);
         using var form = new Workspace(files, 2);
         form.Show();
         var controls = Descendants(form).ToArray();
@@ -65,6 +69,50 @@ internal static class ReviewChecks
         WaitFor(() => save.Enabled);
         list.Items[0].Selected = false;
         list.Items[5].Selected = true;
+        var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == 6);
+        void CheckRows()
+        {
+            WaitFor(() => list.Enabled && list.Items.Count == files.Length);
+            if (list.SelectedItems.Count != 1 || !Descendants(form).OfType<Label>().Any(label => label.Text == Path.GetFileName(files[5])))
+                throw new Exception("Changing an action lost the highlighted source.");
+        }
+        foreach (int mode in new[] { 0, 1, 3, 4, 5, 2 })
+        {
+            action.SelectedIndex = mode;
+            CheckRows();
+            if (mode == 5)
+            {
+                if (save.Enabled || list.Items.Cast<ListViewItem>().Count(i => i.Tag is (string, string)) != 2)
+                    throw new Exception("Incorrect duplicate groups or removal enabled without a selection.");
+                list.SelectedItems[0].Checked = true;
+                Application.DoEvents();
+                if (save.Enabled || list.CheckedItems.Count != 0) throw new Exception("An unmatched file could be checked.");
+                continue;
+            }
+            if (!save.Enabled) throw new Exception($"Action {mode} did not refresh automatically.");
+            if (mode == 0 && !((Change)list.Items[0].Tag!).Target.Contains(Operations.Today))
+                throw new Exception("Date rename preview missing.");
+            if (mode == 1)
+            {
+                Descendants(form).OfType<CheckBox>().Single().Checked = true;
+                WaitFor(() => save.Enabled);
+                if (!Path.GetFileName(((Change)list.Items[0].Tag!).Target).StartsWith(Operations.Today + "_"))
+                    throw new Exception("Date option did not refresh.");
+            }
+            if (mode is 3 or 4)
+            {
+                foreach (var field in Descendants(form).OfType<NumericUpDown>().ToArray())
+                {
+                    field.Controls.OfType<TextBox>().Single().Text = mode == 3 ? "10" : "1";
+                    if (save.Enabled) throw new Exception("Stale numeric preview could be saved.");
+                    WaitFor(() => save.Enabled);
+                }
+                var row = (Change)list.Items[0].Tag!;
+                using var staged = new MagickImage(row.Staged!);
+                if (mode == 3 && staged.Width != 10 || mode == 4 && new FileInfo(row.Staged!).Length > 1000)
+                    throw new Exception("Numeric settings did not refresh the staged result.");
+            }
+        }
         format.SelectedItem = "JPG";
         if (list.Items.Count != files.Length || save.Enabled) throw new Exception("Missing sources or stale save button during format change.");
         WaitFor(() => save.Enabled);
@@ -80,7 +128,7 @@ internal static class ReviewChecks
             if (output.Format != MagickFormat.Jpeg || !File.Exists(change.Source)) throw new Exception("JPG save failed.");
         }
         form.Close();
-        Console.WriteLine("Changing to JPG kept all eight rows and the selected image, refreshed automatically, and saved eight JPEGs.");
+        Console.WriteLine("All six actions and their settings refreshed automatically, kept the selected source, and saved eight JPEGs when requested.");
     }
     private static IEnumerable<Control> Descendants(Control parent) =>
         parent.Controls.Cast<Control>().SelectMany(c => Descendants(c).Prepend(c));

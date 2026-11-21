@@ -14,7 +14,8 @@ internal sealed class Workspace : Form
     private readonly PictureBox before = Picture(), after = Picture();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
-    private readonly Button preview = new() { Text = "Preview", AutoSize = true };
+    private readonly Button preview = new() { Text = "Refresh", AutoSize = true };
+    private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
     private readonly Button apply = new() { Text = "Apply", AutoSize = true, Enabled = false };
     private Plan? plan;
     private Dictionary<string, List<string>> groups = [];
@@ -47,18 +48,31 @@ internal sealed class Workspace : Form
         footer.ColumnStyles.Add(new(SizeType.Percent, 100)); footer.ColumnStyles.Add(new(SizeType.AutoSize)); footer.ColumnStyles.Add(new(SizeType.AutoSize));
         footer.Controls.Add(status, 0, 0); footer.Controls.Add(preview, 1, 0); footer.Controls.Add(apply, 2, 0);
         layout.Controls.Add(footer, 0, 4);
-        action.SelectedIndexChanged += (_, _) => Configure();
+        action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
-        date.CheckedChanged += (_, _) => Reset();
-        foreach (var field in new[] { width, height, limit }) field.ValueChanged += (_, _) => Reset();
+        date.CheckedChanged += async (_, _) => await Preview();
+        editDelay.Tick += async (_, _) => await Preview();
+        foreach (var field in new[] { width, height, limit })
+        {
+            field.ValueChanged += (_, _) => QueueNumericPreview();
+            // NumericUpDown commits typed digits on validation. Schedule a preview while typing, too.
+            field.Controls.OfType<TextBox>().Single().TextChanged += (_, _) => QueueNumericPreview();
+        }
         rows.SelectedIndexChanged += (_, _) => ShowPair();
-        rows.ItemChecked += (_, _) => { if (Mode == 5) BeginInvoke(() => apply.Enabled = !busy && rows.CheckedItems.Count > 0); };
+        rows.ItemCheck += (_, e) =>
+        {
+            if (Mode == 5 && rows.Items[e.Index].Tag is not ValueTuple<string, string>) e.NewValue = CheckState.Unchecked;
+        };
+        rows.ItemChecked += (_, _) =>
+        {
+            if (Mode == 5) BeginInvoke(() => { if (Mode == 5) apply.Enabled = !busy && rows.CheckedItems.Count > 0; });
+        };
         preview.Click += async (_, _) => await Preview();
         apply.Click += async (_, _) => await Apply();
         Configure();
         Shown += async (_, _) => await Preview();
         FormClosing += (_, e) => e.Cancel = busy;
-        FormClosed += (_, _) => { ClearPictures(); plan?.Dispose(); };
+        FormClosed += (_, _) => { editDelay.Dispose(); ClearPictures(); plan?.Dispose(); };
     }
     private static ComboBox Choice(string[] entries)
     {
@@ -82,7 +96,14 @@ internal sealed class Workspace : Form
         rows.CheckBoxes = Mode == 5;
         rows.Columns[1].Text = Mode == 5 ? "Folder" : "Output";
         apply.Text = Mode == 5 ? "Review removal…" : Mode <= 1 ? "Rename" : "Save copies";
-        Reset();
+    }
+    private void QueueNumericPreview()
+    {
+        if (busy || Mode is not (3 or 4)) return;
+        apply.Enabled = false;
+        status.Text = "Updating preview…";
+        editDelay.Stop();
+        editDelay.Start();
     }
     private void ClearPictures()
     {
@@ -135,15 +156,23 @@ internal sealed class Workspace : Form
     }
     private async Task Preview()
     {
+        editDelay.Stop();
         if (busy) return;
-        string? selectedSource = (rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault()?.Tag as Change)?.Source;
+        string? selectedSource = SourceOf(rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault());
         Reset(); Working(true); status.Text = "Preparing preview…";
         try
         {
             var notes = new List<string>();
+            rows.BeginUpdate();
+            foreach (string source in files)
+                rows.Items.Add(new ListViewItem([source, "", "Preparing preview…"]) { Tag = source });
+            rows.EndUpdate();
+            int selectedIndex = Array.IndexOf(files, selectedSource);
+            rows.Items[Math.Max(0, selectedIndex)].Selected = true;
             if (Mode == 5)
             {
                 groups = await Task.Run(() => Operations.Duplicates(files, notes));
+                rows.Items.Clear();
                 int n = 0;
                 foreach (var (hash, paths) in groups)
                 {
@@ -151,17 +180,18 @@ internal sealed class Workspace : Form
                     foreach (var path in paths)
                         rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "Exact match"], group) { Tag = (hash, path), ToolTipText = path });
                 }
+                var otherFiles = files.Except(groups.Values.SelectMany(paths => paths), Operations.Names).ToArray();
+                if (otherFiles.Length > 0)
+                {
+                    var other = new ListViewGroup("Other selected images"); rows.Groups.Add(other);
+                    foreach (var path in otherFiles)
+                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"], other) { Tag = path, ToolTipText = path });
+                }
                 status.Text = $"{groups.Count} duplicate groups";
             }
             else
             {
                 var settings = new Options(Mode, date.Checked, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
-                rows.BeginUpdate();
-                foreach (string source in files)
-                    rows.Items.Add(new ListViewItem([source, "", "Preparing preview…"]) { Tag = source });
-                rows.EndUpdate();
-                int selectedIndex = Array.IndexOf(files, selectedSource);
-                rows.Items[Math.Max(0, selectedIndex)].Selected = true;
                 plan = await Task.Run(() => Operations.Preview(files, settings));
                 rows.Items.Clear();
                 foreach (var c in plan.Changes)
@@ -173,7 +203,7 @@ internal sealed class Workspace : Form
             if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
             if (rows.Items.Count > 0)
             {
-                var selected = rows.Items.Cast<ListViewItem>().FirstOrDefault(item => item.Tag is Change change && change.Source == selectedSource) ?? rows.Items[0];
+                var selected = rows.Items.Cast<ListViewItem>().FirstOrDefault(item => SourceOf(item) == selectedSource) ?? rows.Items[0];
                 selected.Selected = true;
                 selected.EnsureVisible();
             }
@@ -181,6 +211,13 @@ internal sealed class Workspace : Form
         catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
         finally { Working(false); }
     }
+    private static string? SourceOf(ListViewItem? item) => item?.Tag switch
+    {
+        Change change => change.Source,
+        ValueTuple<string, string> match => match.Item2,
+        string path => path,
+        _ => null
+    };
     private async Task Apply()
     {
         if (Mode == 5) { RemoveCopies(); return; }
