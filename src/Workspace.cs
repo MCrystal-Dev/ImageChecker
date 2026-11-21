@@ -15,6 +15,7 @@ internal sealed class Workspace : Form
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Button preview = new() { Text = "Refresh", AutoSize = true };
+    private readonly Button selectAll = new() { Text = "Select all", AutoSize = true, Anchor = AnchorStyles.Right, Enabled = false };
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
     private readonly Button apply = new() { Text = "Apply", AutoSize = true, Enabled = false };
     private Plan? plan;
@@ -27,6 +28,7 @@ internal sealed class Workspace : Form
     {
         files = paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
         Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
+        Icon = Appearance.AppIcon;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Appearance.Window;
         ForeColor = Appearance.Text;
@@ -36,12 +38,18 @@ internal sealed class Workspace : Form
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 48), new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
+        var toolbar = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 2, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
+        toolbar.ColumnStyles.Add(new(SizeType.Percent, 100));
+        toolbar.ColumnStyles.Add(new(SizeType.AutoSize));
+        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Margin = new(0) };
         options.Dock = DockStyle.None;
         options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         options.Margin = new(10, 0, 0, 0);
         actions.Controls.AddRange([Caption("Action"), action, options]);
-        layout.Controls.Add(actions, 0, 0);
+        Appearance.StyleButton(selectAll);
+        toolbar.Controls.Add(actions, 0, 0);
+        toolbar.Controls.Add(selectAll, 1, 0);
+        layout.Controls.Add(toolbar, 0, 0);
         rows.Columns.Add("Source image", 310); rows.Columns.Add("Output", 235); rows.Columns.Add("Details", 390);
         rows.ShowItemToolTips = true;
         rows.BackColor = Appearance.Panel;
@@ -94,10 +102,11 @@ internal sealed class Workspace : Form
                 if (!busy) UpdateSelection();
             });
         };
+        selectAll.Click += (_, _) => SelectAllRows();
         rows.KeyDown += (_, e) =>
         {
             if (e.KeyData != (Keys.Control | Keys.A)) return;
-            foreach (ListViewItem item in rows.Items) item.Selected = true;
+            SelectAllRows();
             e.SuppressKeyPress = true;
         };
         rows.ItemCheck += (_, e) =>
@@ -114,6 +123,13 @@ internal sealed class Workspace : Form
         Shown += async (_, _) => await Preview();
         FormClosing += (_, e) => e.Cancel = busy;
         FormClosed += (_, _) => { editDelay.Dispose(); ClearPictures(); plan?.Dispose(); };
+    }
+    private void SelectAllRows()
+    {
+        rows.BeginUpdate();
+        try { foreach (ListViewItem item in rows.Items) item.Selected = true; }
+        finally { rows.EndUpdate(); }
+        rows.Focus();
     }
     private static ComboBox Choice(string[] entries)
     {
@@ -167,6 +183,7 @@ internal sealed class Workspace : Form
     }
     private void Reset()
     {
+        selectAll.Enabled = false;
         rows.Items.Clear(); rows.Groups.Clear(); groups.Clear();
         ClearPictures(); plan?.Dispose(); plan = null; apply.Enabled = false;
         status.Text = "Preview the selected action.";
@@ -234,6 +251,7 @@ internal sealed class Workspace : Form
     private void Working(bool on)
     {
         busy = on; UseWaitCursor = on; action.Enabled = options.Enabled = preview.Enabled = rows.Enabled = !on;
+        selectAll.Enabled = !on && rows.Items.Count > 0;
         apply.Enabled = !on && Mode == 5 && rows.CheckedItems.Count > 0;
         if (!on) UpdateSelection();
     }
@@ -374,7 +392,7 @@ internal sealed class Workspace : Form
     }
     private bool Details(string title, IEnumerable<string> lines, bool confirm = false)
     {
-        using var dialog = new Form { Text = title, Size = new(720, 340), MinimumSize = new(400, 240), Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
+        using var dialog = new Form { Text = title, Icon = Appearance.AppIcon, Size = new(720, 340), MinimumSize = new(400, 240), Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
         var list = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Lines = lines.ToArray(), Dock = DockStyle.Fill, BackColor = Appearance.Panel, ForeColor = Appearance.Text };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new(0, 8, 0, 0) };
         var cancel = new Button { Text = confirm ? "Cancel" : "Close", DialogResult = DialogResult.Cancel, AutoSize = true };

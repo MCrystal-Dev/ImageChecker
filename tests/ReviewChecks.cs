@@ -23,6 +23,10 @@ internal static class ReviewChecks
                 Application.DoEvents(); Thread.Sleep(20);
             }
             if (list.Items.Count != 2 || review.Enabled) throw new Exception("Duplicate review initial state failed");
+            Descendants(form).OfType<Button>().Single(b => b.Text == "Select all").PerformClick();
+            Application.DoEvents();
+            if (list.SelectedItems.Count != 2 || list.CheckedItems.Count != 0 || review.Enabled)
+                throw new Exception("Select all must highlight duplicates without marking them for recycling.");
             list.Items[0].Checked = true;
             Application.DoEvents();
             if (!review.Enabled) throw new Exception("Review button did not enable.");
@@ -69,6 +73,9 @@ internal static class ReviewChecks
         }
         WaitFor(() => save.Enabled);
         if (!list.MultiSelect || list.SelectedItems.Count != files.Length) throw new Exception("Explorer batch was not selected.");
+        list.SelectedItems.Clear();
+        controls.OfType<Button>().Single(b => b.Text == "Select all").PerformClick();
+        WaitFor(() => save.Enabled && list.SelectedItems.Count == files.Length);
         list.SelectedItems.Clear();
         list.Items[5].Selected = true;
         var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == 6);

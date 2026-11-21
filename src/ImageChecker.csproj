@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
+    <ApplicationIcon>Assets/ImageChecker.ico</ApplicationIcon>
     <PlatformTarget>x64</PlatformTarget>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
@@ -12,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets/ImageChecker.ico" LogicalName="ImageChecker.ImageChecker.ico" />
     <InternalsVisibleTo Include="Checks" />
     <PackageReference Include="Magick.NET-Q8-x64" Version="15.1.0" />
   </ItemGroup>

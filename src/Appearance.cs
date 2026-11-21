@@ -2,6 +2,7 @@ namespace ImageChecker;
 
 internal static class Appearance
 {
+    internal static Icon AppIcon { get; } = new(typeof(Appearance), "ImageChecker.ico");
     internal static Color Window => Tone(0x171A1F, SystemColors.Control);
     internal static Color Panel => Tone(0x24292F, SystemColors.Window);
     internal static Color Canvas => Tone(0x101317, SystemColors.Window);
