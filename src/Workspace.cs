@@ -12,6 +12,7 @@ internal sealed class Workspace : Form
     private readonly ListView rows = new() { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
     private readonly PictureBox before = Picture(), after = Picture();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
+    private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Button preview = new() { Text = "Refresh", AutoSize = true };
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
@@ -27,27 +28,52 @@ internal sealed class Workspace : Form
         files = paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
         Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new(780, 570); Size = new(1020, 690);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new(16) };
+        BackColor = Appearance.Window;
+        ForeColor = Appearance.Text;
+        MinimumSize = new(780, 570); Size = new(1060, 735);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new(16) };
         layout.ColumnStyles.Add(new(SizeType.Percent, 100));
-        foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 54), new RowStyle(SizeType.Percent, 46), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
+        foreach (var style in new[] { new RowStyle(SizeType.AutoSize), new RowStyle(SizeType.Percent, 48), new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
-        actions.Controls.AddRange([Caption("Action"), action]);
-        layout.Controls.Add(actions, 0, 0); layout.Controls.Add(options, 0, 1);
+        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
+        options.Dock = DockStyle.None;
+        options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        options.Margin = new(10, 0, 0, 0);
+        actions.Controls.AddRange([Caption("Action"), action, options]);
+        layout.Controls.Add(actions, 0, 0);
         rows.Columns.Add("Source image", 310); rows.Columns.Add("Output", 235); rows.Columns.Add("Details", 390);
         rows.ShowItemToolTips = true;
-        layout.Controls.Add(rows, 0, 2);
-        var compare = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+        rows.BackColor = Appearance.Panel;
+        rows.ForeColor = Appearance.Text;
+        rows.BorderStyle = BorderStyle.None;
+        rows.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        rows.DrawColumnHeader += Appearance.DrawHeader;
+        rows.DrawSubItem += Appearance.DrawCell;
+        rows.OwnerDraw = !SystemInformation.HighContrast;
+        rows.Margin = new(0);
+        rows.ClientSizeChanged += (_, _) =>
+        {
+            int available = rows.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 2;
+            if (available <= 0) return;
+            rows.Columns[0].Width = available * 36 / 100;
+            rows.Columns[1].Width = available * 32 / 100;
+            rows.Columns[2].Width = available - rows.Columns[0].Width - rows.Columns[1].Width;
+        };
+        layout.Controls.Add(rows, 0, 1);
+        var compare = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new(0, 12, 0, 0) };
         compare.ColumnStyles.Add(new(SizeType.Percent, 50)); compare.ColumnStyles.Add(new(SizeType.Percent, 50));
-        compare.RowStyles.Add(new(SizeType.AutoSize)); compare.RowStyles.Add(new(SizeType.Percent, 100));
-        compare.Controls.Add(leftTitle, 0, 0); compare.Controls.Add(rightTitle, 1, 0);
-        compare.Controls.Add(before, 0, 1); compare.Controls.Add(after, 1, 1); layout.Controls.Add(compare, 0, 3);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3 };
+        compare.RowStyles.Add(new(SizeType.Percent, 100));
+        compare.Controls.Add(PreviewPanel(leftRole, leftTitle, before, new(0, 0, 5, 0)), 0, 0);
+        compare.Controls.Add(PreviewPanel(rightRole, rightTitle, after, new(5, 0, 0, 0)), 1, 0);
+        layout.Controls.Add(compare, 0, 2);
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Margin = new(0, 10, 0, 0) };
+        status.ForeColor = Appearance.Secondary;
+        Appearance.StyleButton(preview);
+        Appearance.StyleButton(apply, primary: true);
         footer.ColumnStyles.Add(new(SizeType.Percent, 100)); footer.ColumnStyles.Add(new(SizeType.AutoSize)); footer.ColumnStyles.Add(new(SizeType.AutoSize));
         footer.Controls.Add(status, 0, 0); footer.Controls.Add(preview, 1, 0); footer.Controls.Add(apply, 2, 0);
-        layout.Controls.Add(footer, 0, 4);
+        layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
         editDelay.Tick += async (_, _) => await Preview();
@@ -96,7 +122,19 @@ internal sealed class Workspace : Form
     }
     private static NumericUpDown Number(int value, int max) => new() { Minimum = 1, Maximum = max, Value = value, Width = 86 };
     private static Label Caption(string text) => new() { Text = text, AutoSize = true, Padding = new(0, 5, 4, 3) };
-    private static PictureBox Picture() => new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = SystemColors.ControlLight };
+    private static PictureBox Picture() => new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Appearance.Canvas, Margin = new(0) };
+    private static TableLayoutPanel PreviewPanel(Label role, Label name, PictureBox picture, Padding margin)
+    {
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Appearance.Panel, Padding = new(1), Margin = margin, ColumnCount = 2, RowCount = 2 };
+        panel.ColumnStyles.Add(new(SizeType.AutoSize)); panel.ColumnStyles.Add(new(SizeType.Percent, 100));
+        panel.RowStyles.Add(new(SizeType.AutoSize)); panel.RowStyles.Add(new(SizeType.Percent, 100));
+        role.ForeColor = Appearance.Secondary; role.Margin = new(10, 3, 6, 5);
+        name.AutoSize = false; name.AutoEllipsis = true; name.Dock = DockStyle.Fill;
+        name.TextAlign = ContentAlignment.MiddleRight; name.Margin = new(0, 0, 10, 0); name.Padding = new(0);
+        panel.Controls.Add(role, 0, 0); panel.Controls.Add(name, 1, 0);
+        panel.Controls.Add(picture, 0, 1); panel.SetColumnSpan(picture, 2);
+        return panel;
+    }
     private void Configure()
     {
         options.Controls.Clear();
@@ -108,7 +146,10 @@ internal sealed class Workspace : Form
             case 5: options.Controls.Add(Caption("Check the copies to recycle. Keep at least one image in each group.")); break;
         }
         rows.CheckBoxes = Mode == 5;
+        leftRole.Text = Mode == 5 ? "Selected image" : "Original";
+        rightRole.Text = Mode == 5 ? "Matching copy" : "Preview";
         rows.Columns[1].Text = Mode == 5 ? "Folder" : "Output";
+        rows.Columns[2].Text = Mode == 5 ? "Duplicate group" : "Details";
         apply.Text = Mode == 5 ? "Review removal…" : Mode <= 1 ? "Rename" : "Save copies";
     }
     private void QueueNumericPreview()
@@ -122,8 +163,7 @@ internal sealed class Workspace : Form
     private void ClearPictures()
     {
         foreach (var box in new[] { before, after }) { var old = box.Image; box.Image = null; old?.Dispose(); }
-        leftTitle.Text = "Original";
-        rightTitle.Text = "Preview";
+        leftTitle.Text = rightTitle.Text = "";
     }
     private void Reset()
     {
@@ -172,7 +212,7 @@ internal sealed class Workspace : Form
                 }
                 item.SubItems[1].Text = item.Selected ? Path.GetFileName(change.Target) : "";
                 item.SubItems[2].Text = item.Selected ? change.Details : "";
-                item.ToolTipText = item.Selected ? change.Target : change.Source;
+                item.ToolTipText = item.Selected ? change.Source + Environment.NewLine + change.Target : change.Source;
             }
             status.Text = $"{count} of {files.Length} ready to {(Mode <= 1 ? "rename" : "save")} · Ctrl-click or Shift-click to select";
             if (plan.Notes.Count > 0) status.Text += $" · {plan.Notes.Count} skipped";
@@ -210,7 +250,7 @@ internal sealed class Workspace : Form
             var notes = new List<string>();
             rows.BeginUpdate();
             foreach (string source in files)
-                rows.Items.Add(new ListViewItem([source, "", "Preparing preview…"]) { Tag = source });
+                rows.Items.Add(new ListViewItem([Path.GetFileName(source), "", "Preparing preview…"]) { Tag = source, ToolTipText = source });
             rows.EndUpdate();
             RestoreSelection(selection, focusedSource);
             ShowPair();
@@ -221,18 +261,17 @@ internal sealed class Workspace : Form
                 int n = 0;
                 foreach (var (hash, paths) in groups)
                 {
-                    var group = new ListViewGroup($"Match {++n} · {paths.Count} identical files"); rows.Groups.Add(group);
+                    string group = $"Match {++n} · {paths.Count} identical files";
                     foreach (var path in paths)
-                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "Exact match"], group) { Tag = (hash, path), ToolTipText = path });
+                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, group]) { Tag = (hash, path), ToolTipText = path });
                 }
                 var otherFiles = files.Except(groups.Values.SelectMany(paths => paths), Operations.Names).ToArray();
                 if (otherFiles.Length > 0)
                 {
-                    var other = new ListViewGroup("Other selected images"); rows.Groups.Add(other);
                     foreach (var path in otherFiles)
-                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"], other) { Tag = path, ToolTipText = path });
+                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"]) { Tag = path, ToolTipText = path });
                 }
-                status.Text = $"{groups.Count} duplicate groups";
+                status.Text = $"{groups.Count} duplicate group{(groups.Count == 1 ? "" : "s")}";
             }
             else
             {
@@ -240,11 +279,11 @@ internal sealed class Workspace : Form
                 plan = await Task.Run(() => Operations.Preview(files, settings));
                 rows.Items.Clear();
                 foreach (var c in plan.Changes)
-                    rows.Items.Add(new ListViewItem([c.Source, Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Target });
+                    rows.Items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
                 notes.AddRange(plan.Notes);
                 status.Text = $"{plan.Changes.Count} of {files.Length} ready";
             }
-            foreach (var note in notes) rows.Items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Color.Maroon, ToolTipText = note });
+            foreach (var note in notes) rows.Items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
             if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
             RestoreSelection(selection, focusedSource);
         }
@@ -335,12 +374,13 @@ internal sealed class Workspace : Form
     }
     private bool Details(string title, IEnumerable<string> lines, bool confirm = false)
     {
-        using var dialog = new Form { Text = title, Size = new(720, 340), StartPosition = FormStartPosition.CenterParent };
-        var list = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Lines = lines.ToArray(), Dock = DockStyle.Fill };
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
+        using var dialog = new Form { Text = title, Size = new(720, 340), MinimumSize = new(400, 240), Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
+        var list = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Lines = lines.ToArray(), Dock = DockStyle.Fill, BackColor = Appearance.Panel, ForeColor = Appearance.Text };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new(0, 8, 0, 0) };
         var cancel = new Button { Text = confirm ? "Cancel" : "Close", DialogResult = DialogResult.Cancel, AutoSize = true };
         buttons.Controls.Add(cancel); dialog.CancelButton = cancel; dialog.AcceptButton = cancel;
         if (confirm) buttons.Controls.Add(new Button { Text = "Move to Recycle Bin", AutoSize = true, DialogResult = DialogResult.OK });
+        foreach (Button button in buttons.Controls) Appearance.StyleButton(button);
         dialog.Controls.Add(list); dialog.Controls.Add(buttons);
         return dialog.ShowDialog(this) == DialogResult.OK;
     }

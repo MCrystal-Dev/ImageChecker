@@ -17,6 +17,8 @@ internal static class Checks
         if (args is ["--explorer"]) { ExplorerChecks.Run(); return; }
         if (args is ["--review"])
         {
+            Application.EnableVisualStyles();
+            Application.SetColorMode(SystemColorMode.Dark);
             using var context = new ApplicationContext();
             Exception? failure = null;
             void TestOnIdle(object? sender, EventArgs e)

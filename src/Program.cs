@@ -34,6 +34,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        Application.SetColorMode(SystemColorMode.Dark);
         try
         {
             if (args is ["--install"] or ["--uninstall"])
