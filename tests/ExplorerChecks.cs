@@ -57,10 +57,11 @@ internal static class ExplorerChecks
                 foreach (var process in Process.GetProcessesByName("ImageChecker").Where(p => !old.Contains(p.Id)))
                 {
                     if (process.MainWindowTitle != $"ImageChecker — {expectedImages} selected") continue;
-                    bool currentLabels = HasActionDropdown(process.MainWindowHandle, action);
+                    string? problem = DropdownProblem(process.MainWindowHandle, action);
+                    string? executable = process.MainModule?.FileName;
                     process.CloseMainWindow();
                     if (!process.WaitForExit(5000)) { process.CloseMainWindow(); process.WaitForExit(5000); }
-                    if (!currentLabels) throw new Exception($"Incorrect dropdown labels or active action after opening {action}.");
+                    if (problem != null) throw new Exception($"{executable}, requested {action}: {problem}");
                     Console.WriteLine($"Verified dropdown via {action} on {expectedImages} image(s).");
                     return;
                 }
@@ -74,9 +75,9 @@ internal static class ExplorerChecks
             foreach (var ptr in pidls) Marshal.FreeCoTaskMem(ptr);
         }
     }
-    private static bool HasActionDropdown(nint window, string expectedAction)
+    private static string? DropdownProblem(nint window, string expectedAction)
     {
-        bool matched = false;
+        string? problem = "Action dropdown missing";
         EnumChildWindows(window, (child, _) =>
         {
             var className = new StringBuilder(256);
@@ -87,12 +88,13 @@ internal static class ExplorerChecks
             {
                 var label = new StringBuilder(256);
                 SendMessage(child, 0x148, i, label); // CB_GETLBTEXT
-                if (label.ToString() != Program.Actions[i]) return true;
+                if (label.ToString() != Program.Actions[i]) { problem = $"Action {i} reads '{label}'"; return false; }
             }
-            matched = (int)SendMessage(child, 0x147, 0, 0) == Array.IndexOf(Program.Actions, expectedAction);
-            return !matched;
+            int active = (int)SendMessage(child, 0x147, 0, 0);
+            problem = active == Array.IndexOf(Program.Actions, expectedAction) ? null : $"Selected action index {active}";
+            return false;
         }, 0);
-        return matched;
+        return problem;
     }
     private delegate bool EnumChildProc(nint child, nint parameter);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(nint parent, EnumChildProc callback, nint parameter);

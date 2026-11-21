@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Win32;
 using ComData = System.Runtime.InteropServices.ComTypes.IDataObject;
 
@@ -9,22 +11,34 @@ internal static class ShellMenu
 {
     private const string FileMenu = @"Software\Classes\*\shell\MCrystal.ImageChecker";
     private const string FolderMenu = @"Software\Classes\Directory\shell\MCrystal.ImageChecker";
-    private static Guid ClassId(int index) => new($"F9F9A2F7-DABC-4DFB-B271-53150000000{index}");
+    private const string ClassPrefix = "F9F9A2F7-DABC-4DFB-B271-";
+    // Windows can cache LocalServer32 after an upgrade. Give each installed build its own handlers.
+    private static readonly string BuildKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+        $"{typeof(ShellMenu).Assembly.GetName().Version}|{Environment.ProcessPath!.ToUpperInvariant()}")))[..10];
+    private static Guid ClassId(int index) => new($"{ClassPrefix}{BuildKey}{index:X2}");
 
     internal static void Register(bool install)
     {
         string executable = Environment.ProcessPath!;
-        for (int i = 0; i < Program.Actions.Length; i++)
+        var oldHandlers = new HashSet<Guid>();
+        foreach (string path in new[] { FileMenu, FolderMenu })
         {
-            string id = ClassId(i).ToString("B");
-            string cls = @"Software\Classes\CLSID\" + id;
-            if (!install)
+            for (int i = 0; i < Program.Actions.Length; i++)
             {
-                Registry.CurrentUser.DeleteSubKeyTree(cls, false);
-                continue;
+                using var drop = Registry.CurrentUser.OpenSubKey(path + $@"\shell\action{i}\DropTarget");
+                if (Guid.TryParse(drop?.GetValue("CLSID") as string, out var old) &&
+                    old.ToString().StartsWith(ClassPrefix, StringComparison.OrdinalIgnoreCase))
+                    oldHandlers.Add(old);
             }
+        }
+        for (int i = 0; install && i < Program.Actions.Length; i++)
+        {
+            var id = ClassId(i);
+            oldHandlers.Remove(id);
+            string cls = @"Software\Classes\CLSID\" + id.ToString("B");
             using var server = Registry.CurrentUser.CreateSubKey(cls + @"\LocalServer32");
             server.SetValue("", $"\"{executable}\" --shell {i}");
+            server.SetValue("ServerExecutable", executable);
         }
         foreach (string path in new[] { FileMenu, FolderMenu })
         {
@@ -49,7 +63,9 @@ internal static class ShellMenu
                 target.SetValue("CLSID", ClassId(i).ToString("B"));
             }
         }
-        SHChangeNotify(0x08000000, 0, 0, 0);
+        foreach (var id in oldHandlers)
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CLSID\" + id.ToString("B"), false);
+        SHChangeNotify(0x08000000, 0x1000, 0, 0);
     }
 
     internal static void Listen(int action)
