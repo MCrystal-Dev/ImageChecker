@@ -4,12 +4,17 @@ namespace ImageChecker;
 
 internal sealed class Workspace : Form
 {
+    private sealed class ImageListView : ListView
+    {
+        internal ImageListView() => DoubleBuffered = true;
+    }
     private readonly string[] files;
     private readonly ComboBox action = Choice(Program.Actions);
     private readonly ComboBox format = Choice(["PNG", "JPG", "WebP"]);
     private readonly NumericUpDown width = Number(1920, 100000), height = Number(1080, 100000), limit = Number(500, 1000000);
     private readonly FlowLayoutPanel options = new() { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
-    private readonly ListView rows = new() { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
+    private readonly Control[][] optionFields;
+    private readonly ListView rows = new ImageListView { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
     private readonly PictureBox before = Picture(), after = Picture();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
@@ -22,6 +27,7 @@ internal sealed class Workspace : Form
     private Plan? plan;
     private Dictionary<string, List<string>> groups = [];
     private bool busy;
+    private bool previewPending;
     private bool selectionPending;
     private int Mode => action.SelectedIndex;
 
@@ -43,6 +49,14 @@ internal sealed class Workspace : Form
         options.Dock = DockStyle.None;
         options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         options.Margin = new(10, 0, 0, 0);
+        optionFields = [
+            [], [],
+            [Caption("Output format"), format],
+            [Caption("Max width (px)"), width, Caption("Max height (px)"), height],
+            [Caption("Max file size (KB, 1 KB = 1,000 bytes)"), limit],
+            [Caption("Check the copies to recycle. Keep at least one image in each group.")]
+        ];
+        foreach (var fields in optionFields) options.Controls.AddRange(fields);
         toolbar.Controls.AddRange([Caption("Action"), action, options]);
         layout.Controls.Add(toolbar, 0, 0);
         rows.Columns.Add("Source image", 310); rows.Columns.Add("Output", 235); rows.Columns.Add("Details", 390);
@@ -113,7 +127,8 @@ internal sealed class Workspace : Form
         };
         rows.ItemCheck += (_, e) =>
         {
-            if (Mode == 5 && rows.Items[e.Index].Tag is not ValueTuple<string, string>) e.NewValue = CheckState.Unchecked;
+            if (busy) e.NewValue = e.CurrentValue;
+            else if (Mode == 5 && rows.Items[e.Index].Tag is not ValueTuple<string, string>) e.NewValue = CheckState.Unchecked;
         };
         rows.ItemChecked += (_, _) =>
         {
@@ -137,6 +152,7 @@ internal sealed class Workspace : Form
     private static ComboBox Choice(string[] entries)
     {
         var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+        Appearance.StyleChoice(box);
         box.Items.AddRange(entries); box.SelectedIndex = 0; return box;
     }
     private static NumericUpDown Number(int value, int max) => new() { Minimum = 1, Maximum = max, Value = value, Width = 86 };
@@ -156,15 +172,10 @@ internal sealed class Workspace : Form
     }
     private void Configure()
     {
-        options.Controls.Clear();
-        switch (Mode)
-        {
-            case 2: options.Controls.AddRange([Caption("Output format"), format]); break;
-            case 3: options.Controls.AddRange([Caption("Max width (px)"), width, Caption("Max height (px)"), height]); break;
-            case 4: options.Controls.AddRange([Caption("Max file size (KB, 1 KB = 1,000 bytes)"), limit]); break;
-            case 5: options.Controls.Add(Caption("Check the copies to recycle. Keep at least one image in each group.")); break;
-        }
-        rows.CheckBoxes = Mode == 5;
+        options.SuspendLayout();
+        for (int mode = 0; mode < optionFields.Length; mode++)
+            foreach (var field in optionFields[mode]) field.Visible = Mode == mode;
+        options.ResumeLayout(true);
         leftRole.Text = Mode == 5 ? "Selected image" : "Original";
         rightRole.Text = Mode == 5 ? "Matching copy" : "Preview";
         rows.Columns[1].Text = Mode == 5 ? "Folder" : "Output";
@@ -174,7 +185,7 @@ internal sealed class Workspace : Form
     }
     private void QueueNumericPreview()
     {
-        if (busy || Mode is not (3 or 4)) return;
+        if (!options.Enabled || Mode is not (3 or 4)) return;
         apply.Enabled = overwrite.Enabled = false;
         status.Text = "Updating preview…";
         editDelay.Stop();
@@ -253,9 +264,12 @@ internal sealed class Workspace : Form
         }
         catch (Exception) { /* A damaged image can still be renamed or compared by its bytes. */ }
     }
-    private void Working(bool on)
+    private void Working(bool on, bool previewing = false)
     {
-        busy = on; UseWaitCursor = on; action.Enabled = options.Enabled = preview.Enabled = rows.Enabled = !on;
+        busy = on;
+        UseWaitCursor = on && !previewing;
+        action.Enabled = options.Enabled = rows.Enabled = !on || previewing;
+        preview.Enabled = !on;
         selectAll.Enabled = !on && rows.Items.Count > 0;
         overwrite.Enabled = false;
         apply.Enabled = !on && Mode == 5 && rows.CheckedItems.Count > 0;
@@ -264,52 +278,61 @@ internal sealed class Workspace : Form
     private async Task Preview(HashSet<string>? selection = null)
     {
         editDelay.Stop();
-        if (busy) return;
-        string? focusedSource = SourceOf(ActiveRow());
-        selection ??= rows.Items.Count == 0 ? files.ToHashSet(Operations.Names)
-            : rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names);
-        Working(true); Reset(); status.Text = "Preparing preview…";
+        if (busy) { previewPending = true; return; }
+        Working(true, previewing: true);
+        status.Text = "Preparing preview…";
         try
         {
-            var notes = new List<string>();
-            rows.BeginUpdate();
-            foreach (string source in files)
-                rows.Items.Add(new ListViewItem([Path.GetFileName(source), "", "Preparing preview…"]) { Tag = source, ToolTipText = source });
-            rows.EndUpdate();
-            RestoreSelection(selection, focusedSource);
-            ShowPair();
-            if (Mode == 5)
+            if (rows.Items.Count == 0)
             {
-                groups = await Task.Run(() => Operations.Duplicates(files, notes));
-                rows.Items.Clear();
-                int n = 0;
-                foreach (var (hash, paths) in groups)
-                {
-                    string group = $"Match {++n} · {paths.Count} identical files";
-                    foreach (var path in paths)
-                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, group]) { Tag = (hash, path), ToolTipText = path });
-                }
-                var otherFiles = files.Except(groups.Values.SelectMany(paths => paths), Operations.Names).ToArray();
-                if (otherFiles.Length > 0)
-                {
-                    foreach (var path in otherFiles)
-                        rows.Items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"]) { Tag = path, ToolTipText = path });
-                }
-                status.Text = $"{groups.Count} duplicate group{(groups.Count == 1 ? "" : "s")}";
+                rows.Items.AddRange(files.Select(source => new ListViewItem([Path.GetFileName(source), "", "Preparing preview…"]) { Tag = source, ToolTipText = source }).ToArray());
+                RestoreSelection(selection ?? files.ToHashSet(Operations.Names), null);
+                ShowPair();
             }
-            else
+            do
             {
-                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
-                plan = await Task.Run(() => Operations.Preview(files, settings));
-                rows.Items.Clear();
-                foreach (var c in plan.Changes)
-                    rows.Items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
-                notes.AddRange(plan.Notes);
-                status.Text = $"{plan.Changes.Count} of {files.Length} ready";
-            }
-            foreach (var note in notes) rows.Items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
-            if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
-            RestoreSelection(selection, focusedSource);
+                previewPending = false;
+                var notes = new List<string>();
+                var items = new List<ListViewItem>();
+                plan?.Dispose(); plan = null;
+                if (Mode == 5)
+                {
+                    groups = await Task.Run(() => Operations.Duplicates(files, notes));
+                    if (previewPending) continue;
+                    int n = 0;
+                    foreach (var (hash, paths) in groups)
+                    {
+                        string group = $"Match {++n} · {paths.Count} identical files";
+                        foreach (var path in paths)
+                            items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, group]) { Tag = (hash, path), ToolTipText = path });
+                    }
+                    foreach (var path in files.Except(groups.Values.SelectMany(paths => paths), Operations.Names))
+                        items.Add(new ListViewItem([Path.GetFileName(path), Path.GetDirectoryName(path)!, "No exact match found"]) { Tag = path, ToolTipText = path });
+                    status.Text = $"{groups.Count} duplicate group{(groups.Count == 1 ? "" : "s")}";
+                }
+                else
+                {
+                    var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
+                    plan = await Task.Run(() => Operations.Preview(files, settings));
+                    if (previewPending) continue;
+                    foreach (var c in plan.Changes)
+                        items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
+                    notes.AddRange(plan.Notes);
+                }
+                foreach (var note in notes) items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
+                if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
+                var highlighted = selection ?? rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names);
+                string? focusedSource = SourceOf(ActiveRow());
+                rows.BeginUpdate();
+                try
+                {
+                    rows.Items.Clear();
+                    rows.CheckBoxes = Mode == 5;
+                    rows.Items.AddRange(items.ToArray());
+                    RestoreSelection(highlighted, focusedSource);
+                }
+                finally { rows.EndUpdate(); }
+            } while (previewPending);
         }
         catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
         finally { Working(false); }
@@ -336,6 +359,7 @@ internal sealed class Workspace : Form
     };
     private async Task Apply(bool replaceOriginals = false)
     {
+        if (busy) return;
         if (Mode == 5) { RemoveCopies(); return; }
         if (plan == null || selectionPending || editDelay.Enabled) return;
         var selected = rows.SelectedItems.Cast<ListViewItem>().OrderBy(item => item.Index)

@@ -17,8 +17,9 @@ internal static class ReviewChecks
             form.Show();
             var list = Descendants(form).OfType<ListView>().Single();
             var review = Descendants(form).OfType<Button>().Single(b => b.Text.StartsWith("Review removal"));
+            var refresh = Descendants(form).OfType<Button>().Single(b => b.Text == "Refresh");
             var deadline = DateTime.UtcNow.AddSeconds(15);
-            while ((list.Items.Count != 2 || !list.Enabled) && DateTime.UtcNow < deadline)
+            while ((list.Items.Count != 2 || !refresh.Enabled) && DateTime.UtcNow < deadline)
             {
                 Application.DoEvents(); Thread.Sleep(20);
             }
@@ -86,7 +87,7 @@ internal static class ReviewChecks
         var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == 6);
         void CheckRows()
         {
-            WaitFor(() => list.Enabled && list.Items.Count == files.Length);
+            WaitFor(() => refresh.Enabled && list.Items.Count == files.Length);
             if (list.SelectedItems.Count != 1 || !Descendants(form).OfType<Label>().Any(label => label.Text == Path.GetFileName(files[5])))
                 throw new Exception("Changing an action lost the highlighted source.");
         }
@@ -119,7 +120,7 @@ internal static class ReviewChecks
             }
             if (mode is 3 or 4)
             {
-                foreach (var field in Descendants(form).OfType<NumericUpDown>().ToArray())
+                foreach (var field in Descendants(form).OfType<NumericUpDown>().Where(field => field.Visible).ToArray())
                 {
                     field.Controls.OfType<TextBox>().Single().Text = mode == 3 ? "10" : "1";
                     if (save.Enabled) throw new Exception("Stale numeric preview could be saved.");
@@ -131,6 +132,22 @@ internal static class ReviewChecks
                     throw new Exception("Numeric settings did not refresh the staged result.");
             }
         }
+        var previousRow = list.Items[5];
+        format.SelectedItem = "WebP";
+        if (!format.Enabled || !action.Enabled || !list.Enabled || list.Items[5] != previousRow || !previousRow.Selected)
+            throw new Exception("Refreshing disabled a selector or cleared the highlighted row.");
+        if (!SystemInformation.HighContrast)
+        {
+            foreach (var box in new[] { action, format })
+            {
+                using var frame = new Bitmap(box.Width, box.Height);
+                box.DrawToBitmap(frame, box.ClientRectangle);
+                var fill = frame.GetPixel(box.Width - SystemInformation.VerticalScrollBarWidth - 8, box.Height / 2);
+                if (fill.GetBrightness() > 0.5f) throw new Exception("Selector painted a light background during refresh.");
+            }
+        }
+        action.SelectedIndex = 3;
+        action.SelectedIndex = 2;
         format.SelectedItem = "JPG";
         if (list.Items.Count != files.Length || save.Enabled) throw new Exception("Missing sources or stale save button during format change.");
         WaitFor(() => save.Enabled);
@@ -168,7 +185,7 @@ internal static class ReviewChecks
         if (files.Where((path, i) => !File.ReadAllBytes(path).SequenceEqual(originals[i]) || File.Exists(Path.ChangeExtension(path, ".jpg"))).Any())
             throw new Exception("Cancel modified a source or produced a conversion.");
         save.PerformClick();
-        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        WaitFor(() => refresh.Enabled && list.SelectedItems.Count == 0);
         for (int i = 0; i < files.Length; i++)
         {
             var change = changes[i];
@@ -182,7 +199,7 @@ internal static class ReviewChecks
         list.Items[1].Selected = true;
         WaitFor(() => overwrite.Enabled);
         ConfirmOverwrite(true, 1);
-        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        WaitFor(() => refresh.Enabled && list.SelectedItems.Count == 0);
         if (File.Exists(files[1]) || files.Where((path, i) => i != 1 && !File.ReadAllBytes(path).SequenceEqual(originals[i])).Any())
             throw new Exception("Confirmed overwrite did not respect the selection.");
         files[1] = Path.ChangeExtension(files[1], ".jpg");
@@ -199,7 +216,7 @@ internal static class ReviewChecks
         WaitFor(() => save.Enabled);
         var renames = list.SelectedItems.Cast<ListViewItem>().Select(item => (Change)item.Tag!).ToArray();
         save.PerformClick();
-        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        WaitFor(() => refresh.Enabled && list.SelectedItems.Count == 0);
         if (renames.Any(c => !File.Exists(c.Target) || File.Exists(c.Source)) ||
             files.Where((_, i) => !selected.Contains(i)).Any(file => !File.Exists(file)))
             throw new Exception("Rename did not respect highlighted rows.");

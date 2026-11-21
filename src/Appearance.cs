@@ -14,6 +14,27 @@ internal static class Appearance
     private static Color Tone(int rgb, Color accessible) => SystemInformation.HighContrast
         ? accessible : Color.FromArgb(unchecked((int)0xFF000000) | rgb);
 
+    internal static void StyleChoice(ComboBox box)
+    {
+        if (SystemInformation.HighContrast) return;
+        box.FlatStyle = FlatStyle.Flat;
+        box.BackColor = Panel;
+        box.ForeColor = Text;
+        box.DrawMode = DrawMode.OwnerDrawFixed;
+        box.DrawItem += (_, e) =>
+        {
+            bool highlighted = e.State.HasFlag(DrawItemState.Selected) && !e.State.HasFlag(DrawItemState.ComboBoxEdit);
+            Color background = highlighted ? Selection : Panel;
+            using var brush = new SolidBrush(background);
+            e.Graphics.FillRectangle(brush, e.Bounds);
+            if (e.Index < 0) return;
+            TextRenderer.DrawText(e.Graphics, box.GetItemText(box.Items[e.Index]), box.Font, e.Bounds,
+                box.Enabled ? Text : Secondary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            if (e.State.HasFlag(DrawItemState.Focus)) ControlPaint.DrawFocusRectangle(e.Graphics, e.Bounds, Text, background);
+        };
+    }
+
     internal static void StyleButton(Button button, bool primary = false)
     {
         button.MinimumSize = new(88, 32);
