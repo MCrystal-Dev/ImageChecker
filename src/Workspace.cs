@@ -48,7 +48,7 @@ internal sealed class Workspace : Form
         footer.Controls.Add(status, 0, 0); footer.Controls.Add(preview, 1, 0); footer.Controls.Add(apply, 2, 0);
         layout.Controls.Add(footer, 0, 4);
         action.SelectedIndexChanged += (_, _) => Configure();
-        format.SelectedIndexChanged += (_, _) => Reset();
+        format.SelectedIndexChanged += async (_, _) => await Preview();
         date.CheckedChanged += (_, _) => Reset();
         foreach (var field in new[] { width, height, limit }) field.ValueChanged += (_, _) => Reset();
         rows.SelectedIndexChanged += (_, _) => ShowPair();
@@ -87,6 +87,8 @@ internal sealed class Workspace : Form
     private void ClearPictures()
     {
         foreach (var box in new[] { before, after }) { var old = box.Image; box.Image = null; old?.Dispose(); }
+        leftTitle.Text = "Original";
+        rightTitle.Text = "Preview";
     }
     private void Reset()
     {
@@ -98,7 +100,12 @@ internal sealed class Workspace : Form
     {
         ClearPictures();
         if (rows.SelectedItems.Count == 0) return;
-        if (rows.SelectedItems[0].Tag is Change c)
+        if (rows.SelectedItems[0].Tag is string source)
+        {
+            leftTitle.Text = Path.GetFileName(source);
+            Thumb(before, source);
+        }
+        else if (rows.SelectedItems[0].Tag is Change c)
         {
             leftTitle.Text = Path.GetFileName(c.Source); rightTitle.Text = Path.GetFileName(c.Target);
             Thumb(before, c.Source); Thumb(after, c.Staged ?? c.Source);
@@ -128,6 +135,8 @@ internal sealed class Workspace : Form
     }
     private async Task Preview()
     {
+        if (busy) return;
+        string? selectedSource = (rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault()?.Tag as Change)?.Source;
         Reset(); Working(true); status.Text = "Preparing preview…";
         try
         {
@@ -147,7 +156,14 @@ internal sealed class Workspace : Form
             else
             {
                 var settings = new Options(Mode, date.Checked, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
+                rows.BeginUpdate();
+                foreach (string source in files)
+                    rows.Items.Add(new ListViewItem([source, "", "Preparing preview…"]) { Tag = source });
+                rows.EndUpdate();
+                int selectedIndex = Array.IndexOf(files, selectedSource);
+                rows.Items[Math.Max(0, selectedIndex)].Selected = true;
                 plan = await Task.Run(() => Operations.Preview(files, settings));
+                rows.Items.Clear();
                 foreach (var c in plan.Changes)
                     rows.Items.Add(new ListViewItem([c.Source, Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Target });
                 notes.AddRange(plan.Notes);
@@ -155,9 +171,14 @@ internal sealed class Workspace : Form
             }
             foreach (var note in notes) rows.Items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Color.Maroon, ToolTipText = note });
             if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
-            if (rows.Items.Count > 0) rows.Items[0].Selected = true;
+            if (rows.Items.Count > 0)
+            {
+                var selected = rows.Items.Cast<ListViewItem>().FirstOrDefault(item => item.Tag is Change change && change.Source == selectedSource) ?? rows.Items[0];
+                selected.Selected = true;
+                selected.EnsureVisible();
+            }
         }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Preview failed"); }
+        catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
         finally { Working(false); }
     }
     private async Task Apply()
