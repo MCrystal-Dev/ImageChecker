@@ -9,7 +9,7 @@ internal sealed class Workspace : Form
     private readonly ComboBox format = Choice(["PNG", "JPG", "WebP"]);
     private readonly NumericUpDown width = Number(1920, 100000), height = Number(1080, 100000), limit = Number(500, 1000000);
     private readonly FlowLayoutPanel options = new() { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
-    private readonly ListView rows = new() { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = false };
+    private readonly ListView rows = new() { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
     private readonly PictureBox before = Picture(), after = Picture();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
@@ -19,12 +19,13 @@ internal sealed class Workspace : Form
     private Plan? plan;
     private Dictionary<string, List<string>> groups = [];
     private bool busy;
+    private bool selectionPending;
     private int Mode => action.SelectedIndex;
 
     internal Workspace(string[] paths, int mode)
     {
         files = paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
-        Text = $"ImageChecker — {files.Length} selected";
+        Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(780, 570); Size = new(1020, 690);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new(16) };
@@ -56,7 +57,23 @@ internal sealed class Workspace : Form
             // NumericUpDown commits typed digits on validation. Schedule a preview while typing, too.
             field.Controls.OfType<TextBox>().Single().TextChanged += (_, _) => QueueNumericPreview();
         }
-        rows.SelectedIndexChanged += (_, _) => ShowPair();
+        rows.SelectedIndexChanged += (_, _) =>
+        {
+            if (busy || selectionPending) return;
+            selectionPending = true;
+            if (Mode != 5) apply.Enabled = false;
+            BeginInvoke(() =>
+            {
+                selectionPending = false;
+                if (!busy) UpdateSelection();
+            });
+        };
+        rows.KeyDown += (_, e) =>
+        {
+            if (e.KeyData != (Keys.Control | Keys.A)) return;
+            foreach (ListViewItem item in rows.Items) item.Selected = true;
+            e.SuppressKeyPress = true;
+        };
         rows.ItemCheck += (_, e) =>
         {
             if (Mode == 5 && rows.Items[e.Index].Tag is not ValueTuple<string, string>) e.NewValue = CheckState.Unchecked;
@@ -117,23 +134,51 @@ internal sealed class Workspace : Form
     private void ShowPair()
     {
         ClearPictures();
-        if (rows.SelectedItems.Count == 0) return;
-        if (rows.SelectedItems[0].Tag is string source)
+        var active = ActiveRow();
+        if (active?.Tag is string source)
         {
             leftTitle.Text = Path.GetFileName(source);
             Thumb(before, source);
         }
-        else if (rows.SelectedItems[0].Tag is Change c)
+        else if (active?.Tag is Change c)
         {
             leftTitle.Text = Path.GetFileName(c.Source); rightTitle.Text = Path.GetFileName(c.Target);
             Thumb(before, c.Source); Thumb(after, c.Staged ?? c.Source);
         }
-        else if (rows.SelectedItems[0].Tag is ValueTuple<string, string> pair)
+        else if (active?.Tag is ValueTuple<string, string> pair)
         {
             string other = groups[pair.Item1].First(p => p != pair.Item2);
             leftTitle.Text = Path.GetFileName(pair.Item2); rightTitle.Text = Path.GetFileName(other);
             Thumb(before, pair.Item2); Thumb(after, other);
         }
+    }
+    private ListViewItem? ActiveRow() => rows.FocusedItem is { Selected: true } focused
+        ? focused : rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault();
+
+    private void UpdateSelection()
+    {
+        if (Mode != 5 && plan != null)
+        {
+            int count = 0, number = plan.CounterStart;
+            foreach (ListViewItem item in rows.Items)
+            {
+                if (item.Tag is not Change change) continue;
+                if (item.Selected) count++;
+                if (Mode != 1) continue;
+                if (item.Selected)
+                {
+                    change = Operations.NumberedRename(change.Source, change.Original, plan.Day, ref number);
+                    item.Tag = change;
+                }
+                item.SubItems[1].Text = item.Selected ? Path.GetFileName(change.Target) : "";
+                item.SubItems[2].Text = item.Selected ? change.Details : "";
+                item.ToolTipText = item.Selected ? change.Target : change.Source;
+            }
+            status.Text = $"{count} of {files.Length} ready to {(Mode <= 1 ? "rename" : "save")} · Ctrl-click or Shift-click to select";
+            if (plan.Notes.Count > 0) status.Text += $" · {plan.Notes.Count} skipped";
+            apply.Enabled = count > 0 && !editDelay.Enabled;
+        }
+        ShowPair();
     }
     private static void Thumb(PictureBox box, string path)
     {
@@ -149,14 +194,17 @@ internal sealed class Workspace : Form
     private void Working(bool on)
     {
         busy = on; UseWaitCursor = on; action.Enabled = options.Enabled = preview.Enabled = rows.Enabled = !on;
-        apply.Enabled = !on && (Mode == 5 ? rows.CheckedItems.Count > 0 : plan?.Changes.Count > 0);
+        apply.Enabled = !on && Mode == 5 && rows.CheckedItems.Count > 0;
+        if (!on) UpdateSelection();
     }
-    private async Task Preview()
+    private async Task Preview(HashSet<string>? selection = null)
     {
         editDelay.Stop();
         if (busy) return;
-        string? selectedSource = SourceOf(rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault());
-        Reset(); Working(true); status.Text = "Preparing preview…";
+        string? focusedSource = SourceOf(ActiveRow());
+        selection ??= rows.Items.Count == 0 ? files.ToHashSet(Operations.Names)
+            : rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names);
+        Working(true); Reset(); status.Text = "Preparing preview…";
         try
         {
             var notes = new List<string>();
@@ -164,8 +212,8 @@ internal sealed class Workspace : Form
             foreach (string source in files)
                 rows.Items.Add(new ListViewItem([source, "", "Preparing preview…"]) { Tag = source });
             rows.EndUpdate();
-            int selectedIndex = Array.IndexOf(files, selectedSource);
-            rows.Items[Math.Max(0, selectedIndex)].Selected = true;
+            RestoreSelection(selection, focusedSource);
+            ShowPair();
             if (Mode == 5)
             {
                 groups = await Task.Run(() => Operations.Duplicates(files, notes));
@@ -198,15 +246,23 @@ internal sealed class Workspace : Form
             }
             foreach (var note in notes) rows.Items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Color.Maroon, ToolTipText = note });
             if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
-            if (rows.Items.Count > 0)
-            {
-                var selected = rows.Items.Cast<ListViewItem>().FirstOrDefault(item => SourceOf(item) == selectedSource) ?? rows.Items[0];
-                selected.Selected = true;
-                selected.EnsureVisible();
-            }
+            RestoreSelection(selection, focusedSource);
         }
         catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
         finally { Working(false); }
+    }
+    private void RestoreSelection(HashSet<string> selection, string? focusedSource)
+    {
+        ListViewItem? focused = null;
+        rows.BeginUpdate();
+        foreach (ListViewItem item in rows.Items)
+        {
+            string? path = SourceOf(item);
+            item.Selected = path != null && selection.Contains(path);
+            if (item.Selected && (focused == null || Operations.Names.Equals(path, focusedSource))) focused = item;
+        }
+        rows.EndUpdate();
+        if (focused != null) { focused.Focused = true; focused.EnsureVisible(); }
     }
     private static string? SourceOf(ListViewItem? item) => item?.Tag switch
     {
@@ -218,18 +274,33 @@ internal sealed class Workspace : Form
     private async Task Apply()
     {
         if (Mode == 5) { RemoveCopies(); return; }
-        if (plan == null) return;
+        if (plan == null || selectionPending || editDelay.Enabled) return;
+        var selected = rows.SelectedItems.Cast<ListViewItem>().OrderBy(item => item.Index)
+            .Select(item => item.Tag).OfType<Change>().ToArray();
+        if (selected.Length == 0) return;
         Working(true);
         try
         {
             int mode = Mode;
-            var result = await Task.Run(() => Operations.Apply(plan, mode));
+            var result = await Task.Run(() => Operations.Apply(plan, mode, selected));
             if (result.Errors.Count > 0) Details("Some files could not be processed", result.Errors);
             if (result.Done == files.Length && mode <= 1) { Working(false); Close(); return; }
+            if (selected.Length < files.Length && result.Done > 0)
+            {
+                if (mode <= 1)
+                {
+                    var renamed = result.Completed.ToDictionary(change => change.Source, change => change.Target, Operations.Names);
+                    for (int i = 0; i < files.Length; i++) files[i] = renamed.GetValueOrDefault(files[i], files[i]);
+                }
+                busy = false;
+                await Preview(new HashSet<string>(Operations.Names));
+                status.Text = $"{result.Done} files {(mode <= 1 ? "renamed" : "saved")}. Select images for the next change.";
+                return;
+            }
             Reset(); status.Text = $"{result.Done} files {(mode <= 1 ? "renamed" : "saved")}.";
         }
         catch (Exception ex) { Reset(); status.Text = ex.Message; }
-        finally { if (!IsDisposed) Working(false); }
+        finally { if (!IsDisposed && busy) Working(false); }
     }
     private void RemoveCopies()
     {

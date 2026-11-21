@@ -15,7 +15,22 @@ internal static class Checks
     private static void Main(string[] args)
     {
         if (args is ["--explorer"]) { ExplorerChecks.Run(); return; }
-        if (args is ["--review"]) { ReviewChecks.Run(); return; }
+        if (args is ["--review"])
+        {
+            using var context = new ApplicationContext();
+            Exception? failure = null;
+            void TestOnIdle(object? sender, EventArgs e)
+            {
+                Application.Idle -= TestOnIdle;
+                try { ReviewChecks.Run(); }
+                catch (Exception ex) { failure = ex; }
+                finally { context.ExitThread(); }
+            }
+            Application.Idle += TestOnIdle;
+            Application.Run(context);
+            if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            return;
+        }
         var folder = Directory.CreateTempSubdirectory("ImageChecker-checks-");
         string keyName = @"Software\ImageChecker-checks-" + Guid.NewGuid().ToString("N");
         using var sandbox = Registry.CurrentUser.CreateSubKey(keyName);

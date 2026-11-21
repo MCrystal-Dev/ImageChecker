@@ -15,6 +15,10 @@ internal record Stamp(long Length, DateTime Modified)
     }
 }
 internal sealed record Change(string Source, string Target, Stamp Original, string Details, string? Staged = null, int Number = 0);
+internal sealed record ApplyResult(List<Change> Completed, List<string> Errors)
+{
+    internal int Done => Completed.Count;
+}
 internal sealed class Plan : IDisposable
 {
     internal readonly List<Change> Changes = [];
@@ -57,7 +61,6 @@ internal static class Operations
         {
             int number = options.Action == 1 ? Locked(k => (int)(k.GetValue(plan.Day) ?? 0)) : 0;
             plan.CounterStart = number;
-            string numberPrefix = plan.Day.Replace('-', '_') + "_";
             var used = new HashSet<string>(Names);
             foreach (var src in paths.Distinct(Names))
             {
@@ -72,14 +75,8 @@ internal static class Operations
                     bool collision = false;
                     if (options.Action == 1)
                     {
-                        do
-                        {
-                            number = checked(number + 1);
-                            target = Path.Combine(directory, $"{numberPrefix}{number:D3}{ext}");
-                            if (!Taken(target, used)) break;
-                            collision = true;
-                        } while (true);
-                        details = "Rename";
+                        plan.Changes.Add(NumberedRename(src, stamp, plan.Day, ref number));
+                        continue;
                     }
                     else
                     {
@@ -100,7 +97,7 @@ internal static class Operations
                         }
                     }
                     used.Add(target);
-                    plan.Changes.Add(new(src, target, stamp, details + (collision ? " · name in use, next free name shown" : ""), staged, options.Action == 1 ? number : 0));
+                    plan.Changes.Add(new(src, target, stamp, details + (collision ? " · name in use, next free name shown" : ""), staged));
                 }
                 catch (Exception ex) { plan.Notes.Add($"{src} — {ex.Message}"); }
             }
@@ -109,6 +106,18 @@ internal static class Operations
         catch { plan.Dispose(); throw; }
     }
     private static bool Taken(string path, HashSet<string> used) => used.Contains(path) || Path.Exists(path);
+
+    internal static Change NumberedRename(string source, Stamp original, string day, ref int number)
+    {
+        int previous = number;
+        string target;
+        do
+        {
+            number = checked(number + 1);
+            target = Path.Combine(Path.GetDirectoryName(source)!, $"{day.Replace('-', '_')}_{number:D3}{Path.GetExtension(source)}");
+        } while (Path.Exists(target));
+        return new(source, target, original, number == previous + 1 ? "Rename" : "Rename · name in use, next free name shown", Number: number);
+    }
 
     internal static MagickFormat FormatOf(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
@@ -155,16 +164,16 @@ internal static class Operations
         return $"{image.Width} × {image.Height} px · {new FileInfo(dest).Length:N0} bytes";
     }
 
-    internal static (int Done, List<string> Errors) Apply(Plan plan, int action)
+    internal static ApplyResult Apply(Plan plan, int action, IReadOnlyList<Change>? selected = null)
     {
-        (int, List<string>) Run(RegistryKey? key)
+        ApplyResult Run(RegistryKey? key)
         {
             if (action <= 1 && plan.Day != Today) throw new IOException("The date changed. Preview again.");
             if (key != null && (int)(key.GetValue(plan.Day) ?? 0) != plan.CounterStart)
                 throw new IOException("The daily counter changed. Preview again for current names.");
             var errors = new List<string>();
-            int done = 0;
-            foreach (var row in plan.Changes)
+            var completed = new List<Change>();
+            foreach (var row in selected ?? plan.Changes)
             {
                 try
                 {
@@ -182,7 +191,7 @@ internal static class Operations
                         try { File.Copy(row.Staged, temp); File.Move(temp, row.Target); }
                         finally { File.Delete(temp); }
                     }
-                    done++;
+                    completed.Add(row);
                 }
                 catch (Exception ex)
                 {
@@ -190,7 +199,7 @@ internal static class Operations
                     if (key != null) break;
                 }
             }
-            return (done, errors);
+            return new(completed, errors);
         }
         return action == 1 ? Locked(k => Run(k)) : Run(null);
     }

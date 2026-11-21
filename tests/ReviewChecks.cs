@@ -1,5 +1,6 @@
 using ImageChecker;
 using ImageMagick;
+using System.Runtime.InteropServices;
 
 internal static class ReviewChecks
 {
@@ -67,7 +68,8 @@ internal static class ReviewChecks
             if (!ready()) throw new Exception("Format preview or save timed out.");
         }
         WaitFor(() => save.Enabled);
-        list.Items[0].Selected = false;
+        if (!list.MultiSelect || list.SelectedItems.Count != files.Length) throw new Exception("Explorer batch was not selected.");
+        list.SelectedItems.Clear();
         list.Items[5].Selected = true;
         var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == 6);
         void CheckRows()
@@ -123,16 +125,66 @@ internal static class ReviewChecks
         if (!changes.Select(c => c.Source).SequenceEqual(files) || changes.Any(c => !c.Target.EndsWith(".jpg") || File.Exists(c.Target))
             || list.SelectedItems.Count != 1 || list.SelectedItems[0].Index != 5)
             throw new Exception("Format change lost the selection or produced incorrect output names.");
+        ClickRow(list, 4, Keys.None);
+        ClickRow(list, 6, Keys.ShiftKey);
+        ClickRow(list, 1, Keys.ControlKey);
+        int[] selected = [1, 4, 5, 6];
+        if (!list.SelectedIndices.Cast<int>().SequenceEqual(selected)) throw new Exception("Ctrl/Shift selection did not match Explorer.");
+        WaitFor(() => save.Enabled);
         save.PerformClick();
-        WaitFor(() => list.Enabled && list.Items.Count == 0);
-        foreach (var change in changes)
+        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        for (int i = 0; i < files.Length; i++)
         {
+            var change = changes[i];
+            if (!File.Exists(change.Source) || File.Exists(change.Target) != selected.Contains(i))
+                throw new Exception("Export affected files outside the selection.");
+            if (!selected.Contains(i)) continue;
             using var output = new MagickImage(change.Target);
-            if (output.Format != MagickFormat.Jpeg || !File.Exists(change.Source)) throw new Exception("JPG save failed.");
+            if (output.Format != MagickFormat.Jpeg) throw new Exception("JPG save failed.");
         }
+        if (save.Enabled) throw new Exception("An empty selection enabled Save.");
+        foreach (int i in selected) list.Items[i].Selected = true;
+        action.SelectedIndex = 1;
+        WaitFor(() => save.Enabled);
+        var numbered = list.SelectedItems.Cast<ListViewItem>().Select(item => (Change)item.Tag!).ToArray();
+        if (!numbered.Select(c => c.Source).SequenceEqual(selected.Select(i => files[i])) ||
+            !numbered.Select(c => c.Number).SequenceEqual(Enumerable.Range(numbered[0].Number, selected.Length)))
+            throw new Exception("Numbered preview lost or skipped a selected row.");
+        action.SelectedIndex = 0;
+        WaitFor(() => save.Enabled);
+        var renames = list.SelectedItems.Cast<ListViewItem>().Select(item => (Change)item.Tag!).ToArray();
+        save.PerformClick();
+        WaitFor(() => list.Enabled && list.SelectedItems.Count == 0);
+        if (renames.Any(c => !File.Exists(c.Target) || File.Exists(c.Source)) ||
+            files.Where((_, i) => !selected.Contains(i)).Any(file => !File.Exists(file)))
+            throw new Exception("Rename did not respect highlighted rows.");
         form.Close();
-        Console.WriteLine("All six actions and their settings refreshed automatically, kept the selected source, and saved eight JPEGs when requested.");
+        Console.WriteLine("Native Ctrl/Shift selection, selected-only export and rename, and consecutive numbering passed.");
     }
+    private static void ClickRow(ListView list, int index, Keys modifier)
+    {
+        list.Focus();
+        list.EnsureVisible(index);
+        var bounds = list.Items[index].GetBounds(ItemBoundsPortion.Label);
+        nint point = ((bounds.Top + bounds.Height / 2) << 16) | (bounds.Left + 4);
+        var original = new byte[256];
+        if (!GetKeyboardState(original)) throw new Exception("Could not read the test thread's key state.");
+        var keys = (byte[])original.Clone();
+        if (modifier != Keys.None) keys[(int)modifier] = 0x80;
+        int flags = modifier switch { Keys.ControlKey => 8, Keys.ShiftKey => 4, _ => 0 };
+        try
+        {
+            SetKeyboardState(keys);
+            PostMessage(list.Handle, 0x201, flags | 1, point);
+            PostMessage(list.Handle, 0x202, flags, point);
+            Application.DoEvents();
+        }
+        finally { SetKeyboardState(original); }
+        Application.DoEvents();
+    }
+    [DllImport("user32.dll")] private static extern bool GetKeyboardState([Out] byte[] keys);
+    [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] keys);
+    [DllImport("user32.dll")] private static extern bool PostMessage(nint window, uint message, nint keys, nint point);
     private static IEnumerable<Control> Descendants(Control parent) =>
         parent.Controls.Cast<Control>().SelectMany(c => Descendants(c).Prepend(c));
 }

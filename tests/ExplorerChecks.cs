@@ -56,7 +56,7 @@ internal static class ExplorerChecks
             {
                 foreach (var process in Process.GetProcessesByName("ImageChecker").Where(p => !old.Contains(p.Id)))
                 {
-                    if (process.MainWindowTitle != $"ImageChecker — {expectedImages} selected") continue;
+                    if (process.MainWindowTitle != $"ImageChecker — {expectedImages} image{(expectedImages == 1 ? "" : "s")}") continue;
                     string? problem = DropdownProblem(process.MainWindowHandle, action);
                     string? executable = process.MainModule?.FileName;
                     process.CloseMainWindow();

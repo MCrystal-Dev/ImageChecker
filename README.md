@@ -7,7 +7,7 @@ ImageChecker adds a right-click menu to Windows File Explorer for working with o
 1. Download **ImageChecker-win-x64.zip** from the [latest release](https://github.com/MCrystal-Dev/ImageChecker/releases/latest).
 2. Extract the entire ZIP to a folder you want to keep, then double-click **Enable Explorer Menu.cmd**. It registers the menu for your Windows account.
 3. Right-click one or more images or folders in File Explorer. On Windows 11, choose **Show more options → ImageChecker**. Selecting folders includes PNG, JPG/JPEG, and WebP files directly inside each selected folder. To process images in a subfolder, select that subfolder itself.
-4. Choose an action and adjust its settings. The preview updates automatically as you switch actions or change settings. Review the results, then click **Rename**, **Save copies**, or **Review removal**.
+4. The images start selected. Click one row, Ctrl-click to toggle individual images, Shift-click to select a range, or use Ctrl+A to select all. **Rename** and **Save copies** apply to the highlighted images. Numbered renames allocate numbers to those images in list order. The preview updates automatically when you change the action or its settings. For duplicate removal, check the copies to recycle and click **Review removal**.
 
 You can also double-click **ImageChecker.exe** and select images from the file picker. The download includes the .NET runtime and runs on x64 Windows 10 and 11. To remove the menu, run **Remove Explorer Menu.cmd**. If you move the extracted folder, run **Enable Explorer Menu.cmd** from its new location.
 
