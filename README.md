@@ -9,7 +9,13 @@ ImageChecker adds a right-click menu to Windows File Explorer for working with o
 3. Right-click one or more images or folders in File Explorer. On Windows 11, choose **Show more options → ImageChecker**. Selecting folders includes PNG, JPG/JPEG, and WebP files directly inside each selected folder. To process images in a subfolder, select that subfolder itself.
 4. The images start selected. Click one row, Ctrl-click to toggle individual images, Shift-click to select a range, or use **Select all** in the bottom bar or Ctrl+A to highlight every row. **Rename**, **Export copies** and **Overwrite** apply to the highlighted images. Numbered renames allocate numbers in list order. The preview updates automatically when you change the action or its settings. Choose **Find duplicates** to review matching pairs.
 
-You can also double-click **ImageChecker.exe** and select images from the file picker. The download includes the .NET runtime and runs on x64 Windows 10 and 11. To remove the menu, run **Remove Explorer Menu.cmd**. If you move the extracted folder, run **Enable Explorer Menu.cmd** from its new location.
+You can also double-click **ImageChecker.exe** and select images from the file picker. To remove the menu, run **Remove Explorer Menu.cmd**. If you move the extracted folder, run **Enable Explorer Menu.cmd** from its new location.
+
+## Windows compatibility
+
+The ZIP includes the .NET 10 runtime and the x64 image-processing library. Use it on an Intel or AMD x64 PC. ImageChecker is tested locally on Windows 11. For Windows 10, check your edition and version against the [supported .NET 10 Windows releases](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md#windows).
+
+The window fits the monitor's working area and rescales when moved between monitors with different display scales. The layout tests exercise all six actions at simulated 100%, 125%, 150% and 200% scaling.
 
 ## Actions
 
@@ -35,7 +41,15 @@ On Windows x64 with the .NET 10 SDK:
 ```powershell
 dotnet run --project src
 dotnet run --project tests -c Release
+dotnet run --project tests -c Release -- --layout
+dotnet run --project tests -c Release -- --review
 .\packaging\Build.ps1
 ```
 
 The build script produces `dist/ImageChecker-win-x64.zip`. The app uses Windows Forms, Magick.NET and a per-user Explorer drop target that receives the full selection in one invocation. The ZIP includes notices for the bundled components.
+
+The interactive review checks use temporary files and exercise the Windows Recycle Bin. To measure duplicate-scan startup with the same generated 48-file batch, run `dotnet run --project tests -c Release -- --benchmark`.
+
+## License
+
+ImageChecker is distributed under the [MIT license](LICENSE). The bundled .NET and Magick.NET components carry their own licenses and notices in the release ZIP.

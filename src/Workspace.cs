@@ -45,7 +45,10 @@ internal sealed class Workspace : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Appearance.Window;
         ForeColor = Appearance.Text;
-        MinimumSize = new(780, 570); Size = new(1060, 735);
+        SuspendLayout();
+        AutoScaleDimensions = new(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        Appearance.FitWindow(this, new(1060, 735), new(500, 300));
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new(16) };
         layout.ColumnStyles.Add(new(SizeType.Percent, 100));
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), imageListHeight, new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
@@ -94,7 +97,8 @@ internal sealed class Workspace : Form
         viewer.Controls.Add(reviewMessage);
         reviewMessage.BringToFront();
         layout.Controls.Add(viewer, 0, 2);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 8, Margin = new(0, 10, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new(0, 6, 0, 0) };
+        var buttons = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, WrapContents = false, Margin = Padding.Empty };
         status.ForeColor = Appearance.Secondary;
         Appearance.StyleButton(preview);
         Appearance.StyleButton(selectAll);
@@ -104,12 +108,14 @@ internal sealed class Workspace : Form
         Appearance.StyleButton(deleteLeft);
         Appearance.StyleButton(deleteRight);
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
+        footer.RowStyles.Add(new(SizeType.AutoSize));
+        footer.RowStyles.Add(new(SizeType.AutoSize));
         foreach (Button button in new[] { selectAll, preview, overwrite, apply, deleteLeft, keepBoth, deleteRight })
         {
-            footer.ColumnStyles.Add(new(SizeType.AutoSize));
-            footer.Controls.Add(button, footer.ColumnStyles.Count - 1, 0);
+            buttons.Controls.Add(button);
         }
         footer.Controls.Add(status, 0, 0);
+        footer.Controls.Add(buttons, 0, 1);
         layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
@@ -147,6 +153,7 @@ internal sealed class Workspace : Form
         apply.Click += async (_, _) => await Apply();
         overwrite.Click += async (_, _) => await Apply(replaceOriginals: true);
         Configure();
+        ResumeLayout(true);
         Shown += async (_, _) => await Preview();
         FormClosing += (_, e) => e.Cancel = busy;
         FormClosed += (_, _) => { editDelay.Dispose(); fileTips.Dispose(); ClearPictures(); plan?.Dispose(); };
@@ -164,7 +171,11 @@ internal sealed class Workspace : Form
         Appearance.StyleChoice(box);
         box.Items.AddRange(entries); box.SelectedIndex = 0; return box;
     }
-    private static NumericUpDown Number(int value, int max) => new() { Minimum = 1, Maximum = max, Value = value, Width = 86 };
+    private static NumericUpDown Number(int value, int max) => new()
+    {
+        Minimum = 1, Maximum = max, Value = value, Width = 86,
+        BackColor = Appearance.Panel, ForeColor = Appearance.Text
+    };
     private static Label Caption(string text) => new() { Text = text, AutoSize = true, Padding = new(0, 5, 4, 3) };
     private static PictureBox Picture() => new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Appearance.Canvas, Margin = new(0) };
     private static TableLayoutPanel PreviewPanel(Label role, Label name, PictureBox picture, Padding margin)
@@ -208,7 +219,7 @@ internal sealed class Workspace : Form
     }
     private void ClearPictures()
     {
-        foreach (var box in new[] { before, after }) { var old = box.Image; box.Image = null; old?.Dispose(); }
+        Thumb(before, null); Thumb(after, null);
         leftTitle.Text = rightTitle.Text = "";
     }
     private void Reset()
@@ -220,32 +231,33 @@ internal sealed class Workspace : Form
     }
     private void ShowPair()
     {
-        ClearPictures();
+        string? leftPath = null, rightPath = null, outputName = null;
         if (Mode == 5)
         {
             if (review?.Current is {} pair)
             {
-                leftTitle.Text = Path.GetFileName(pair.Left.Path);
-                rightTitle.Text = Path.GetFileName(pair.Right.Path);
+                leftPath = pair.Left.Path;
+                rightPath = pair.Right.Path;
                 leftRole.Text = $"Left · {pair.Left.Details}";
                 rightRole.Text = $"Right · {pair.Right.Details}";
                 fileTips.SetToolTip(leftTitle, pair.Left.Path);
                 fileTips.SetToolTip(rightTitle, pair.Right.Path);
-                Thumb(before, pair.Left.Path); Thumb(after, pair.Right.Path);
             }
-            return;
         }
-        var active = ActiveRow();
-        if (active?.Tag is string source)
+        else
         {
-            leftTitle.Text = Path.GetFileName(source);
-            Thumb(before, source);
+            var active = ActiveRow();
+            leftPath = SourceOf(active);
+            if (active?.Tag is Change change)
+            {
+                rightPath = change.Staged ?? change.Source;
+                outputName = change.Target;
+            }
         }
-        else if (active?.Tag is Change c)
-        {
-            leftTitle.Text = Path.GetFileName(c.Source); rightTitle.Text = Path.GetFileName(c.Target);
-            Thumb(before, c.Source); Thumb(after, c.Staged ?? c.Source);
-        }
+        leftTitle.Text = Path.GetFileName(leftPath) ?? "";
+        rightTitle.Text = Path.GetFileName(outputName ?? rightPath) ?? "";
+        Thumb(before, leftPath);
+        Thumb(after, rightPath);
     }
     private ListViewItem? ActiveRow() => rows.FocusedItem is { Selected: true } focused
         ? focused : rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault();
@@ -276,16 +288,28 @@ internal sealed class Workspace : Form
         }
         ShowPair();
     }
-    private static void Thumb(PictureBox box, string path)
+    private static void Thumb(PictureBox box, string? path)
     {
+        Bitmap? next = null;
         try
         {
-            using var image = new MagickImage(path, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
-            image.AutoOrient(); image.Thumbnail((uint)Math.Max(1, box.ClientSize.Width), (uint)Math.Max(1, box.ClientSize.Height));
-            using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
-            using var decoded = new Bitmap(stream); box.Image = new Bitmap(decoded);
+            if (path != null)
+            {
+                var key = (path, Stamp.Read(path), box.ClientSize);
+                if (key.Equals(box.Tag)) return;
+                using var image = new MagickImage(path, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
+                image.AutoOrient(); image.Thumbnail((uint)Math.Max(1, box.ClientSize.Width), (uint)Math.Max(1, box.ClientSize.Height));
+                using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
+                using var decoded = new Bitmap(stream);
+                next = new Bitmap(decoded);
+                box.Tag = key;
+            }
         }
         catch (Exception) { /* A damaged image can still be renamed or compared by its bytes. */ }
+        var previous = box.Image;
+        box.Image = next;
+        if (next == null) box.Tag = null;
+        previous?.Dispose();
     }
     private void Working(bool on, bool previewing = false)
     {
@@ -454,7 +478,8 @@ internal sealed class Workspace : Form
     }
     private bool Details(string title, IEnumerable<string> lines, string? confirm = null, string? warning = null)
     {
-        using var dialog = new Form { Text = title, Icon = Appearance.AppIcon, Size = new(720, 340), MinimumSize = new(400, 240), Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
+        using var dialog = new Form { Text = title, Icon = Appearance.AppIcon, AutoScaleDimensions = new(96, 96), AutoScaleMode = AutoScaleMode.Dpi, Padding = new(16), BackColor = Appearance.Window, ForeColor = Appearance.Text, StartPosition = FormStartPosition.CenterParent };
+        Appearance.FitWindow(dialog, new(720, 340), new(360, 240));
         var list = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Lines = lines.ToArray(), Dock = DockStyle.Fill, BackColor = Appearance.Panel, ForeColor = Appearance.Text };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new(0, 8, 0, 0) };
         var cancel = new Button { Text = confirm != null ? "Cancel" : "Close", DialogResult = DialogResult.Cancel, AutoSize = true };
@@ -464,7 +489,9 @@ internal sealed class Workspace : Form
         dialog.Controls.Add(list); dialog.Controls.Add(buttons);
         if (warning != null)
         {
-            dialog.Controls.Add(new Label { Text = warning, Dock = DockStyle.Top, AutoSize = true, MaximumSize = new(640, 0), Padding = new(0, 0, 0, 12), ForeColor = Appearance.Warning });
+            var message = new Label { Text = warning, Dock = DockStyle.Top, AutoSize = true, Padding = new(0, 0, 0, 12), ForeColor = Appearance.Warning };
+            dialog.Controls.Add(message);
+            dialog.ClientSizeChanged += (_, _) => message.MaximumSize = new(Math.Max(1, dialog.DisplayRectangle.Width), 0);
             dialog.Shown += (_, _) => cancel.Focus();
         }
         return dialog.ShowDialog(this) == DialogResult.OK;

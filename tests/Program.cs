@@ -14,17 +14,20 @@ internal static class Checks
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args is ["--benchmark"]) { ScanBenchmark.Run(); return; }
         if (args is ["--explorer"]) { ExplorerChecks.Run(); return; }
-        if (args is ["--review"])
+        if (args is ["--review"] or ["--layout"])
         {
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
-            Application.SetColorMode(SystemColorMode.Dark);
+            Application.SetDefaultFont(new Font("Segoe UI", 10));
+            ImageChecker.Appearance.SetWindowsColorMode();
             using var context = new ApplicationContext();
             Exception? failure = null;
             void TestOnIdle(object? sender, EventArgs e)
             {
                 Application.Idle -= TestOnIdle;
-                try { ReviewChecks.Run(); }
+                try { if (args[0] == "--layout") LayoutChecks.Run(); else ReviewChecks.Run(); }
                 catch (Exception ex) { failure = ex; }
                 finally { context.ExitThread(); }
             }

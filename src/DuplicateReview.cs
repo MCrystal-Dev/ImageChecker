@@ -34,6 +34,7 @@ internal sealed class DuplicateReview
     {
         var selected = sources.ToHashSet(Operations.Names);
         var images = new List<ReviewImage>();
+        var samples = new Dictionary<(string Hash, MagickFormat Format), ReviewImage>();
         foreach (var folder in sources.Select(Path.GetDirectoryName).Distinct(Operations.Names))
         {
             try
@@ -42,7 +43,7 @@ internal sealed class DuplicateReview
                 {
                     try
                     {
-                        if (!File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) images.Add(ReadImage(path));
+                        if (!File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) images.Add(ReadImage(path, samples));
                     }
                     catch (Exception ex) { Notes.Add($"{path} — {ex.Message}"); }
                 }
@@ -53,17 +54,19 @@ internal sealed class DuplicateReview
         Advance();
     }
 
-    private ReviewImage ReadImage(string path)
+    private ReviewImage ReadImage(string path, Dictionary<(string Hash, MagickFormat Format), ReviewImage> samples)
     {
         using var file = File.OpenRead(path);
-        var result = new ReviewImage(path, Operations.Hash(file), file.Length, 0, 0, null);
+        var key = (Hash: Operations.Hash(file), Format: Operations.FormatOf(path));
+        if (samples.TryGetValue(key, out var known)) return known with { Path = path };
+        var result = new ReviewImage(path, key.Hash, file.Length, 0, 0, null);
         try
         {
             file.Position = 0;
-            var settings = new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 2 };
+            var settings = new MagickReadSettings { Format = key.Format, FrameCount = 2 };
             using var frames = new MagickImageCollection();
             frames.Ping(file, settings);
-            if (frames.Count != 1) return result with { Width = frames[0].Width, Height = frames[0].Height };
+            if (frames.Count != 1) return samples[key] = result with { Width = frames[0].Width, Height = frames[0].Height };
             file.Position = 0;
             settings.FrameCount = 1;
             using var image = new MagickImage(file, settings);
@@ -76,7 +79,7 @@ internal sealed class DuplicateReview
             for (int i = 0; i < rgba.Length; i += 4)
                 for (int channel = i; channel < i + 3; channel++)
                     rgba[channel] = (byte)(rgba[channel] * rgba[i + 3] / 255);
-            return result with { Sample = rgba };
+            return samples[key] = result with { Sample = rgba };
         }
         catch (MagickException ex) { Notes.Add($"{path} — {ex.Message}"); return result; }
     }

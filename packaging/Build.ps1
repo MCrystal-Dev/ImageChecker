@@ -11,11 +11,11 @@ $deps = Get-Content -Raw (Join-Path $root 'src/bin/Release/net10.0-windows/win-x
 $libraries = $deps.libraries.PSObject.Properties.Name
 $core = ($libraries -like 'runtimepack.Microsoft.NETCore.App.Runtime.win-x64/*') -replace '^runtimepack\.', ''
 $desktop = ($libraries -like 'runtimepack.Microsoft.WindowsDesktop.App.Runtime.win-x64/*') -replace '^runtimepack\.', ''
-foreach ($name in 'LICENSE.TXT','THIRD-PARTY-NOTICES.TXT') {
-    Copy-Item -LiteralPath (Join-Path $packages "$core/$name") -Destination (Join-Path $app $name)
-}
+Copy-Item -LiteralPath (Join-Path $packages "$core/LICENSE.TXT") -Destination (Join-Path $app 'DotNet-LICENSE.txt')
+Copy-Item -LiteralPath (Join-Path $packages "$core/THIRD-PARTY-NOTICES.TXT") -Destination $app
 Copy-Item -LiteralPath (Join-Path $packages "$desktop/LICENSE") -Destination (Join-Path $app 'WindowsDesktop-LICENSE.txt')
 Copy-Item -Path (Join-Path $PSScriptRoot '*.cmd') -Destination $app
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $app
-$files = @('ImageChecker.exe','Enable Explorer Menu.cmd','Remove Explorer Menu.cmd','README.md','Magick-NOTICE.txt','LICENSE.TXT','THIRD-PARTY-NOTICES.TXT','WindowsDesktop-LICENSE.txt') | ForEach-Object { Join-Path $app $_ }
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $app
+$files = @('ImageChecker.exe','Enable Explorer Menu.cmd','Remove Explorer Menu.cmd','README.md','LICENSE','Magick-NOTICE.txt','DotNet-LICENSE.txt','THIRD-PARTY-NOTICES.TXT','WindowsDesktop-LICENSE.txt') | ForEach-Object { Join-Path $app $_ }
 Compress-Archive -LiteralPath $files -DestinationPath (Join-Path $root 'dist/ImageChecker-win-x64.zip') -Force

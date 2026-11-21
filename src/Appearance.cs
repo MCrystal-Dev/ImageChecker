@@ -2,6 +2,31 @@ namespace ImageChecker;
 
 internal static class Appearance
 {
+    internal static void SetWindowsColorMode()
+    {
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) && !SystemInformation.HighContrast)
+            Application.SetColorMode(SystemColorMode.Dark);
+    }
+
+    internal static void FitWindow(Form form, Size preferred, Size minimum)
+    {
+        void Fit(bool opening)
+        {
+            Rectangle area = Screen.FromControl(form).WorkingArea;
+            Size WithinArea(Size size) => new(Math.Min(size.Width, area.Width), Math.Min(size.Height, area.Height));
+            form.MinimumSize = Size.Empty;
+            form.MinimumSize = WithinArea(form.LogicalToDeviceUnits(minimum));
+            if (form.WindowState != FormWindowState.Normal) return;
+            Size size = WithinArea(opening ? form.LogicalToDeviceUnits(preferred) : form.Size);
+            var center = opening && form.Owner != null ? form.Owner.Bounds : area;
+            int x = opening ? center.Left + (center.Width - size.Width) / 2 : form.Left;
+            int y = opening ? center.Top + (center.Height - size.Height) / 2 : form.Top;
+            form.Bounds = new Rectangle(Math.Clamp(x, area.Left, area.Right - size.Width),
+                Math.Clamp(y, area.Top, area.Bottom - size.Height), size.Width, size.Height);
+        }
+        form.Load += (_, _) => Fit(true);
+        form.DpiChanged += (_, _) => form.BeginInvoke(() => { if (!form.IsDisposed) Fit(false); });
+    }
     internal static Icon AppIcon { get; } = new(typeof(Appearance), "ImageChecker.ico");
     internal static Color Window => Tone(0x171A1F, SystemColors.Control);
     internal static Color Panel => Tone(0x24292F, SystemColors.Window);

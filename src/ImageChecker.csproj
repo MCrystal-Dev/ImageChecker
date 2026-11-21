@@ -2,13 +2,18 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>0.1.11</Version>
+    <Version>0.1.12</Version>
+    <Description>File Explorer tools for resizing, converting, renaming and comparing images.</Description>
+    <Authors>MCrystal-Dev</Authors>
+    <RepositoryUrl>https://github.com/MCrystal-Dev/ImageChecker</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <ApplicationIcon>Assets/ImageChecker.ico</ApplicationIcon>
     <PlatformTarget>x64</PlatformTarget>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationDefaultFont>Segoe UI, 10pt</ApplicationDefaultFont>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
