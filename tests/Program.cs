@@ -47,6 +47,7 @@ internal static class Checks
             var pixels = new byte[320 * 240 * 3];
             new Random(47).NextBytes(pixels);
             using (var img = new MagickImage(pixels, new PixelReadSettings(320, 240, StorageType.Char, PixelMapping.RGB))) img.Write(src);
+            CheckSizeLimits(src);
             string copy = Path.Combine(folder.FullName, "second.png");
             File.Copy(src, copy);
             string converted = Path.Combine(folder.FullName, "small.jpg");
@@ -122,5 +123,37 @@ internal static class Checks
             Registry.CurrentUser.DeleteSubKeyTree(keyName);
             folder.Delete(true);
         }
+    }
+
+    private static void CheckSizeLimits(string source)
+    {
+        var options = new Options(4, "PNG", 0, 0, 10_000);
+        foreach (var format in new[] { "JPG", "WebP", "PNG" })
+        {
+            var codec = Operations.FormatOf("image." + format);
+            long cap = codec == MagickFormat.Png ? 10_000 : 50_000;
+            using var plan = Operations.Preview([source], options with { LimitFormat = format, ByteLimit = cap });
+            Check(plan.Notes.Count == 0, string.Join("\n", plan.Notes));
+            var row = plan.Changes.Single();
+            var applied = Operations.Apply(plan, 4).Completed.Single();
+            byte[] bytes = File.ReadAllBytes(applied.Target);
+            Check(bytes.SequenceEqual(File.ReadAllBytes(row.Staged!)), "Export must match preview");
+            using var decoded = new MagickImage(bytes);
+            Check(Path.GetExtension(row.Target) == "." + format.ToLowerInvariant() && (codec == MagickFormat.Png
+                ? decoded.Format.ToString().StartsWith("Png") : decoded.Format == codec), "Wrong size-limit format");
+            Check(bytes.Length < cap && bytes.Length >= cap * 0.94, $"Poor budget use for {format}: {bytes.Length}/{cap}");
+            if (codec != MagickFormat.Png) Check(decoded.Width == 320 && decoded.Height == 240, "Unnecessary downscale");
+            Console.WriteLine($"{format}: {bytes.Length:N0} bytes under a {cap:N0}-byte limit, {decoded.Width}×{decoded.Height}.");
+        }
+        using var unchanged = Operations.Preview([source], options with { ByteLimit = 1_000_000 });
+        Check(File.ReadAllBytes(unchanged.Changes.Single().Staged!).SequenceEqual(File.ReadAllBytes(source)), "Under-limit original must be preserved");
+        long exactLength = new FileInfo(source).Length;
+        using var boundary = Operations.Preview([source], options with { ByteLimit = exactLength });
+        Check(new FileInfo(boundary.Changes.Single().Staged!).Length < exactLength, "Output must be strictly below the limit");
+        using var convertSmall = Operations.Preview([source], options with { LimitFormat = "WebP", ByteLimit = 1_000_000 });
+        using (var image = new MagickImage(convertSmall.Changes.Single().Staged!))
+            Check(image.Format == MagickFormat.WebP, "Under-limit conversion must encode the requested format");
+        using var impossible = Operations.Preview([source], options with { ByteLimit = 1 });
+        Check(impossible.Changes.Count == 0 && impossible.Notes.Count == 1, "Impossible byte limit must skip the file");
     }
 }

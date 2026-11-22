@@ -11,6 +11,8 @@ internal sealed class Workspace : Form
     private string[] files;
     private readonly ComboBox action = Choice(Program.Actions);
     private readonly ComboBox format = Choice(["PNG", "JPG", "WebP"]);
+    private static readonly string[] LimitFormats = ["JPG", "WebP", "PNG"];
+    private readonly ComboBox limitFormat = Choice(["Do not convert file format", .. LimitFormats.Select(f => $"Convert to {f}")]);
     private readonly NumericUpDown width = Number(1920, 100000), height = Number(1080, 100000), limit = Number(500, 1000000);
     private readonly FlowLayoutPanel options = new() { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
     private readonly Control[][] optionFields;
@@ -54,6 +56,7 @@ internal sealed class Workspace : Form
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), imageListHeight, new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
+        limitFormat.Width = 195;
         var toolbar = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
         options.Dock = DockStyle.None;
         options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -62,11 +65,13 @@ internal sealed class Workspace : Form
             [], [],
             [Caption("Output format"), format],
             [Caption("Max width (px)"), width, Caption("Max height (px)"), height],
-            [Caption("Max file size (KB, 1 KB = 1,000 bytes)"), limit],
+            [Caption("Max size (KB)"), limit, Caption("Convert to"), limitFormat],
             []
         ];
         foreach (var fields in optionFields) options.Controls.AddRange(fields);
         toolbar.Controls.AddRange([Caption("Action"), action, options]);
+        toolbar.ClientSizeChanged += (_, _) => options.MaximumSize = new(Math.Max(1,
+            toolbar.ClientSize.Width - toolbar.Padding.Horizontal - options.Margin.Horizontal), 0);
         layout.Controls.Add(toolbar, 0, 0);
         rows.Columns.Add("Source image", 310); rows.Columns.Add("Output", 235); rows.Columns.Add("Details", 390);
         rows.ShowItemToolTips = true;
@@ -119,6 +124,7 @@ internal sealed class Workspace : Form
         layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
+        limitFormat.SelectedIndexChanged += async (_, _) => await Preview();
         editDelay.Tick += async (_, _) => await Preview();
         foreach (var field in new[] { width, height, limit })
         {
@@ -354,7 +360,8 @@ internal sealed class Workspace : Form
                     UpdateReviewStatus();
                     break;
                 }
-                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000);
+                string? convertTo = limitFormat.SelectedIndex > 0 ? LimitFormats[limitFormat.SelectedIndex - 1] : null;
+                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000, convertTo);
                 plan = await Task.Run(() => Operations.Preview(files, settings));
                 if (previewPending) continue;
                 foreach (var c in plan.Changes)

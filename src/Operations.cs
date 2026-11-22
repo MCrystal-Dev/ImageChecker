@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 
 namespace ImageChecker;
 
-internal record Options(int Action, string Format, int Width, int Height, long ByteLimit);
+internal record Options(int Action, string Format, int Width, int Height, long ByteLimit, string? LimitFormat = null);
 internal record Stamp(long Length, DateTime Modified)
 {
     internal static Stamp Read(string path)
@@ -86,6 +86,7 @@ internal static class Operations
                         string suffix = options.Action switch { 0 => "", 2 => "-converted", 3 => "-resized", 4 => "-limited", _ => throw new ArgumentException("Unknown action.") };
                         string outputStem = options.Action == 0 ? $"{plan.Day}_{stem}" : stem + suffix;
                         if (options.Action == 2) ext = "." + options.Format.ToLowerInvariant();
+                        if (options.Action == 4 && options.LimitFormat != null) ext = "." + options.LimitFormat.ToLowerInvariant();
                         if (options.Action >= 2) directory = exportFolder ??= ExportFolder(directory, create: false);
                         target = Path.Combine(directory, outputStem + ext);
                         for (int i = 2; Taken(target, used); i++)
@@ -170,22 +171,17 @@ internal static class Operations
             var area = new MagickGeometry((uint)options.Width, (uint)options.Height) { Greater = true };
             image.Resize(area);
         }
-        if (options.Action == 4 && new FileInfo(source).Length <= options.ByteLimit)
+        if (options.Action == 4)
+        {
+            if (format != FormatOf(source) || new FileInfo(source).Length >= options.ByteLimit)
+                return SizeLimitedEncoder.Write(image, dest, format, options.ByteLimit);
             File.Copy(source, dest);
+            if (new FileInfo(dest).Length >= options.ByteLimit) throw new IOException("Source changed during preview. Refresh to try again.");
+        }
         else
         {
             image.Quality = 88;
-            while (true)
-            {
-                image.Write(dest, format);
-                long length = new FileInfo(dest).Length;
-                if (options.Action != 4 || length <= options.ByteLimit) break;
-                image.Strip();
-                if (image.Quality > 60 && format != MagickFormat.Png) { image.Quality -= 14; continue; }
-                if (image.Width == 1 && image.Height == 1) throw new IOException("Size limit is too small for this format.");
-                double scale = Math.Min(0.88, 0.96 * Math.Sqrt((double)options.ByteLimit / length));
-                image.Resize(Math.Max(1, (uint)(image.Width * scale)), Math.Max(1, (uint)(image.Height * scale)));
-            }
+            image.Write(dest, format);
         }
         return $"{image.Width} × {image.Height} px · {new FileInfo(dest).Length:N0} bytes";
     }

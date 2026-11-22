@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>0.1.12</Version>
+    <Version>0.1.13</Version>
     <Description>File Explorer tools for resizing, converting, renaming and comparing images.</Description>
     <Authors>MCrystal-Dev</Authors>
     <RepositoryUrl>https://github.com/MCrystal-Dev/ImageChecker</RepositoryUrl>

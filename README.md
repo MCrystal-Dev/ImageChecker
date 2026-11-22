@@ -25,10 +25,12 @@ The window fits the monitor's working area and rescales when moved between monit
 | Rename with date and iterating number | Replaces the original name with the local date and the next number, keeping the extension. For example, the eighth image on 21 November 2026 becomes `2026_11_21_008.png` if it is a PNG. The counter is shared across folders and app restarts. It starts at 001 each local day, skips occupied names and records successful renames. |
 | Change file format | Converts images to PNG, JPG or WebP. Transparent pixels use a white background when converting to JPG. |
 | Resize by dimensions | Fits within the chosen width and height in pixels, preserving proportions and avoiding enlargement. |
-| Resize to a file size limit | Creates a copy at or below the chosen number of KB (1 KB = 1,000 bytes). Shows the resulting dimensions and exact byte count before saving. For larger files it can reduce encoding quality, strip metadata, and shrink the image. |
+| Resize to a file size limit | Creates a copy just under the chosen maximum (1 KB = 1,000 bytes). **Convert to** defaults to **Do not convert file format** and also offers JPG, WebP and PNG. The preview shows the actual dimensions and encoded byte count. |
 | Find duplicates | Compares the selected images with images in their immediate folders. Exact copies appear first, followed by visually similar pairs. Choose **Keep both** to advance, or choose **Delete Left**, **Delete Right**, or click an image. Confirm the displayed path to move that image to the Recycle Bin. |
 
 **Export copies** keeps the originals and creates a new folder named `ImageChecker Export`, then `ImageChecker Export (2)`, and so on. When you open images from several folders together, the export folder goes beside the first source image in the list. Copies use a suffix such as `-resized`.
+
+For a size limit, ImageChecker keeps the original bytes if the format already matches and the file is below the cap. Otherwise it tries full resolution first, including lossless WebP when selected. If needed it strips metadata and searches JPG or WebP quality settings. When a smaller resolution is necessary, it searches for the largest fitting dimensions while preserving proportions. Simple images can reach full quality well below the cap. JPG uses a white background for transparent pixels.
 
 **Overwrite** permanently replaces the selected originals with the previewed images. Review the paths and click **OK** to proceed or **Cancel** to keep the originals. Format changes keep the base name and use the new format's extension. If that name is already occupied by another file, ImageChecker skips that replacement and reports it.
 

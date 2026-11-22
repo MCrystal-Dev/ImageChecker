@@ -143,6 +143,17 @@ internal static class ReviewChecks
             }
             if (mode is 3 or 4)
             {
+                if (mode == 4)
+                {
+                    var choice = controls.OfType<ComboBox>().Single(c => c.Items.Contains("Convert to WebP"));
+                    if (!choice.Visible || choice.Text != "Do not convert file format" ||
+                        !choice.Items.Cast<string>().SequenceEqual(["Do not convert file format", "Convert to JPG", "Convert to WebP", "Convert to PNG"]))
+                        throw new Exception("Missing size-limit conversion choices.");
+                    choice.SelectedIndex = 1;
+                    WaitFor(() => save.Enabled);
+                    if (!((Change)list.SelectedItems[0].Tag!).Target.EndsWith(".jpg"))
+                        throw new Exception("Changing the size-limit format did not update the selected row.");
+                }
                 foreach (var field in Descendants(form).OfType<NumericUpDown>().Where(field => field.Visible).ToArray())
                 {
                     field.Controls.OfType<TextBox>().Single().Text = mode == 3 ? "10" : "1";
