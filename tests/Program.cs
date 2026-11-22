@@ -47,6 +47,7 @@ internal static class Checks
             var pixels = new byte[320 * 240 * 3];
             new Random(47).NextBytes(pixels);
             using (var img = new MagickImage(pixels, new PixelReadSettings(320, 240, StorageType.Char, PixelMapping.RGB))) img.Write(src);
+            CheckImageDates(folder);
             CheckSizeLimits(src);
             string copy = Path.Combine(folder.FullName, "second.png");
             File.Copy(src, copy);
@@ -123,6 +124,54 @@ internal static class Checks
             Registry.CurrentUser.DeleteSubKeyTree(keyName);
             folder.Delete(true);
         }
+    }
+
+    private static void CheckImageDates(DirectoryInfo folder)
+    {
+        var parent = folder.CreateSubdirectory("dates");
+        var child = parent.CreateSubdirectory("nested");
+        string photo = Path.Combine(parent.FullName, "camera.jpg"), generated = Path.Combine(child.FullName, "art.png");
+        string acquired = Path.Combine(child.FullName, "download.webp"), plain = Path.Combine(child.FullName, "plain.png");
+        using (var image = new MagickImage(MagickColors.Red, 22, 17))
+        {
+            image.Write(plain);
+            image.SetAttribute("Creation Time", "Sun, 04 May 2025 11:42:00 GMT");
+            image.Write(generated);
+        }
+        using (var image = new MagickImage(MagickColors.Blue, 22, 17))
+        {
+            var exif = new ExifProfile();
+            exif.SetValue(ExifTag.DateTimeOriginal, "2014:07:06 23:30:00");
+            exif.SetValue(ExifTag.Model, "Fixture Camera");
+            image.SetProfile(exif);
+            image.Write(photo);
+        }
+        using (var image = new MagickImage(MagickColors.Blue, 22, 17))
+        {
+            var xmp = new XmpProfile(System.Text.Encoding.UTF8.GetBytes("""
+                <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:photo="http://ns.microsoft.com/photo/1.0/" photo:DateAcquired="2020-01-02T00:15:00+10:00"/></rdf:RDF></x:xmpmeta>
+                """));
+            image.SetProfile(xmp);
+            image.Write(acquired);
+        }
+        string[] paths = [photo, generated, acquired, plain];
+        Check(Program.ResolveImages([parent.FullName, child.FullName, photo]).ToHashSet(Operations.Names).SetEquals(paths), "Recursive overlapping folder selection");
+        var meta = ImageMetadata.Read(photo);
+        Check(meta.Date.Prefix == "2014-07-06" && meta.Text.Contains("Fixture Camera"), "EXIF capture and camera metadata");
+        var gen = ImageMetadata.Read(generated);
+        Check(gen.Date.Prefix == "2025-05-04", "Embedded PNG creation date: " + gen.Text);
+        var download = ImageMetadata.Read(acquired);
+        Check(download.Date.Prefix == "2020-01-02" && download.Date.Source.Contains("acquired"), "XMP date acquired: " + download.Text);
+        Check(ImageMetadata.Read(plain).Date.Source.Contains("estimate"), "Missing metadata needs a labeled estimate");
+        byte[] original = File.ReadAllBytes(photo);
+        File.WriteAllText(Path.Combine(parent.FullName, "2014-07-06_camera.jpg"), "occupied");
+        var options = new Options(Program.PrefixImageDate, "", 0, 0, 0);
+        using var plan = Operations.Preview(paths, options);
+        var change = plan.Changes.Single(c => c.Source == photo);
+        Check(change.Details.Contains("Date taken") && Path.GetFileName(change.Target) == "2014-07-06_camera (2).jpg", "Date prefix collision or source");
+        Check(Operations.Apply(plan, options.Action, [change]).Done == 1 && original.SequenceEqual(File.ReadAllBytes(change.Target)) && File.Exists(generated), "Selected-only date prefix");
+        using var repeated = Operations.Preview([change.Target], options);
+        Check(repeated.Changes.Count == 0, "Repeated prefix");
     }
 
     private static void CheckSizeLimits(string source)

@@ -27,7 +27,7 @@ internal static class LayoutChecks
             if (!Screen.FromControl(form).WorkingArea.Contains(form.Bounds)) throw new Exception("Window opened outside its monitor.");
             var controls = Children(form).ToArray();
             var refresh = controls.OfType<Button>().Single(b => b.Text == "Refresh");
-            var action = controls.OfType<ComboBox>().Single(c => c.Items.Count == 6);
+            var action = controls.OfType<ComboBox>().Single(c => c.Items.Count == Program.Actions.Length);
             foreach (var (width, height, dpi) in new[] { (800, 600, 96), (1024, 768, 120), (1280, 720, 144), (1280, 720, 192), (1920, 1080, 144), (3840, 2160, 192), (1024, 768, 96) })
             {
                 // Reserve room for a taskbar. Send the same DPI notification a monitor switch produces.
@@ -41,7 +41,7 @@ internal static class LayoutChecks
                 form.Size = size;
                 if (form.DeviceDpi != dpi || form.Width > width || form.Height > height - 48)
                     throw new Exception($"Window exceeds {width}×{height} or failed to adopt {dpi} DPI (was {form.DeviceDpi}).");
-                foreach (int mode in Enumerable.Range(0, 6))
+                foreach (int mode in Enumerable.Range(0, Program.Actions.Length))
                 {
                     action.SelectedIndex = mode;
                     var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -58,7 +58,7 @@ internal static class LayoutChecks
                                 throw new Exception($"{width}×{height}, {dpi} DPI, action {mode}: {c.GetType().Name} '{c.Text}' {bounds} clipped by {parent.GetType().Name} {parent.RectangleToScreen(parent.ClientRectangle)}.");
                     }
                 }
-                Console.WriteLine($"Passed all six actions at {width}×{height}, {dpi * 100 / 96}%.");
+                Console.WriteLine($"Passed all {Program.Actions.Length} actions at {width}×{height}, {dpi * 100 / 96}%.");
             }
             form.Close();
         }

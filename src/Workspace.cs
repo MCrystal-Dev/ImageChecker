@@ -18,6 +18,10 @@ internal sealed class Workspace : Form
     private readonly Control[][] optionFields;
     private readonly ListView rows = new ImageListView { View = View.Details, FullRowSelect = true, HideSelection = false, Dock = DockStyle.Fill, MultiSelect = true };
     private readonly PictureBox before = Picture(), after = Picture();
+    private readonly TextBox metadata = new() { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+        BackColor = Appearance.Canvas, ForeColor = Appearance.Text, BorderStyle = BorderStyle.None, AccessibleName = "Image metadata" };
+    private string? metadataPath;
+    private int metadataRequest;
     private readonly ToolTip fileTips = new();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
@@ -65,7 +69,7 @@ internal sealed class Workspace : Form
             [], [],
             [Caption("Output format"), format],
             [Caption("Max width (px)"), width, Caption("Max height (px)"), height],
-            [Caption("Max size (KB)"), limit, Caption("Convert to"), limitFormat],
+            [Caption("Max size (KB)"), limit, Caption("1 MB = 1,000 KB"), Caption("Convert to"), limitFormat],
             []
         ];
         foreach (var fields in optionFields) options.Controls.AddRange(fields);
@@ -96,7 +100,9 @@ internal sealed class Workspace : Form
         compare.ColumnStyles.Add(new(SizeType.Percent, 50)); compare.ColumnStyles.Add(new(SizeType.Percent, 50));
         compare.RowStyles.Add(new(SizeType.Percent, 100));
         compare.Controls.Add(PreviewPanel(leftRole, leftTitle, before, new(0, 0, 5, 0)), 0, 0);
-        compare.Controls.Add(PreviewPanel(rightRole, rightTitle, after, new(5, 0, 0, 0)), 1, 0);
+        var rightContent = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
+        rightContent.Controls.AddRange([after, metadata]);
+        compare.Controls.Add(PreviewPanel(rightRole, rightTitle, rightContent, new(5, 0, 0, 0)), 1, 0);
         var viewer = new Panel { Dock = DockStyle.Fill, Margin = new(0, 12, 0, 0) };
         viewer.Controls.Add(compare);
         viewer.Controls.Add(reviewMessage);
@@ -184,7 +190,7 @@ internal sealed class Workspace : Form
     };
     private static Label Caption(string text) => new() { Text = text, AutoSize = true, Padding = new(0, 5, 4, 3) };
     private static PictureBox Picture() => new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Appearance.Canvas, Margin = new(0) };
-    private static TableLayoutPanel PreviewPanel(Label role, Label name, PictureBox picture, Padding margin)
+    private static TableLayoutPanel PreviewPanel(Label role, Label name, Control picture, Padding margin)
     {
         var panel = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Appearance.Panel, Padding = new(1), Margin = margin, ColumnCount = 2, RowCount = 2 };
         panel.ColumnStyles.Add(new(SizeType.AutoSize)); panel.ColumnStyles.Add(new(SizeType.Percent, 100));
@@ -205,15 +211,21 @@ internal sealed class Workspace : Form
         bool comparing = Mode == 5;
         fileTips.RemoveAll();
         imageListHeight.Height = comparing ? 0 : 48;
-        rows.Visible = selectAll.Visible = apply.Visible = !comparing;
+        bool inspecting = Mode == Program.ViewMetadata;
+        rows.Visible = selectAll.Visible = !comparing;
+        apply.Visible = !comparing && !inspecting;
+        metadata.Visible = inspecting;
+        after.Visible = !inspecting;
+        rows.Columns[1].Text = inspecting ? "Folder" : "Output";
+        rows.Columns[2].Text = inspecting ? "File type" : "Details";
         keepBoth.Visible = deleteLeft.Visible = deleteRight.Visible = comparing;
         before.Cursor = after.Cursor = comparing ? Cursors.Hand : Cursors.Default;
         reviewMessage.Visible = comparing;
         reviewMessage.Text = "Looking for matches…";
         leftRole.Text = comparing ? "Left" : "Original";
-        rightRole.Text = comparing ? "Right" : "Preview";
+        rightRole.Text = inspecting ? "Metadata" : comparing ? "Right" : "Preview";
         overwrite.Visible = Mode is 2 or 3 or 4;
-        apply.Text = Mode <= 1 ? "Rename" : "Export copies";
+        apply.Text = Program.IsRename(Mode) ? "Rename" : "Export copies";
     }
     private void QueueNumericPreview()
     {
@@ -264,6 +276,19 @@ internal sealed class Workspace : Form
         rightTitle.Text = Path.GetFileName(outputName ?? rightPath) ?? "";
         Thumb(before, leftPath);
         Thumb(after, rightPath);
+        if (Mode == Program.ViewMetadata && !busy) ShowMetadata(leftPath);
+    }
+    private async void ShowMetadata(string? path)
+    {
+        if (path == metadataPath && path != null) return;
+        metadataPath = path;
+        int request = ++metadataRequest;
+        metadata.Text = path == null ? "Select an image to view its metadata." : "Reading metadata…";
+        if (path == null) return;
+        string text;
+        try { text = await Task.Run(() => ImageMetadata.Read(path).Text); }
+        catch (Exception ex) { text = $"Could not read metadata. {ex.Message}"; }
+        if (!IsDisposed && request == metadataRequest && Mode == Program.ViewMetadata) metadata.Text = text;
     }
     private ListViewItem? ActiveRow() => rows.FocusedItem is { Selected: true } focused
         ? focused : rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault();
@@ -360,13 +385,23 @@ internal sealed class Workspace : Form
                     UpdateReviewStatus();
                     break;
                 }
-                string? convertTo = limitFormat.SelectedIndex > 0 ? LimitFormats[limitFormat.SelectedIndex - 1] : null;
-                var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000, convertTo);
-                plan = await Task.Run(() => Operations.Preview(files, settings));
-                if (previewPending) continue;
-                foreach (var c in plan.Changes)
-                    items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
-                notes.AddRange(plan.Notes);
+                if (Mode == Program.ViewMetadata)
+                {
+                    metadataPath = null;
+                    foreach (string file in files)
+                        items.Add(new ListViewItem([Path.GetFileName(file), Path.GetDirectoryName(file)!, Path.GetExtension(file)]) { Tag = file, ToolTipText = file });
+                    status.Text = "Select an image to inspect its metadata.";
+                }
+                else
+                {
+                    string? convertTo = limitFormat.SelectedIndex > 0 ? LimitFormats[limitFormat.SelectedIndex - 1] : null;
+                    var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000, convertTo);
+                    plan = await Task.Run(() => Operations.Preview(files, settings));
+                    if (previewPending) continue;
+                    foreach (var c in plan.Changes)
+                        items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
+                    notes.AddRange(plan.Notes);
+                }
                 foreach (var note in notes) items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
                 if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
                 var highlighted = selection ?? (rows.Items.Count == 0 ? files.ToHashSet(Operations.Names)
@@ -425,10 +460,11 @@ internal sealed class Workspace : Form
             int mode = Mode;
             var result = await Task.Run(() => Operations.Apply(plan, mode, selected, replaceOriginals));
             if (result.Errors.Count > 0) Details("Some files could not be processed", result.Errors);
-            if (result.Done == files.Length && mode <= 1) { Working(false); Close(); return; }
-            string summary = mode <= 1 ? $"Renamed {result.Done}." : replaceOriginals ? $"Replaced {result.Done} original{(result.Done == 1 ? "" : "s")}."
+            bool renaming = Program.IsRename(mode);
+            if (result.Done == files.Length && renaming) { Working(false); Close(); return; }
+            string summary = renaming ? $"Renamed {result.Done}." : replaceOriginals ? $"Replaced {result.Done} original{(result.Done == 1 ? "" : "s")}."
                 : result.Done > 0 ? $"Exported {result.Done} to {Path.GetDirectoryName(result.Completed[0].Target)}" : "No copies exported.";
-            if (mode <= 1 || replaceOriginals)
+            if (renaming || replaceOriginals)
             {
                 var renamed = result.Completed.ToDictionary(change => change.Source, change => change.Target, Operations.Names);
                 for (int i = 0; i < files.Length; i++) files[i] = renamed.GetValueOrDefault(files[i], files[i]);

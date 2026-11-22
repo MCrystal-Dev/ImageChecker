@@ -15,8 +15,9 @@ internal static class ReviewChecks
             File.Copy(first, second);
             string third = Path.Combine(dir.FullName, "third.webp");
             using (var image = new MagickImage(first)) { image.Resize(40, 40); image.Write(third); }
-            using var form = new Workspace([first, second, third], 5);
+            using var form = new Workspace([first, second, third], 5) { TopMost = true };
             form.Show();
+            form.Location = Screen.PrimaryScreen!.WorkingArea.Location;
             var controls = Descendants(form).ToArray();
             var keep = controls.OfType<Button>().Single(b => b.Text == "Keep both");
             var left = controls.OfType<Button>().Single(b => b.Text == "Delete Left");
@@ -32,19 +33,19 @@ internal static class ReviewChecks
             }
             void Confirm(Action choose, string path, bool accept)
             {
-                bool sawPath = false;
+                string? displayedPath = null;
                 using var timer = new System.Windows.Forms.Timer { Interval = 50 };
                 timer.Tick += (_, _) =>
                 {
                     var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f != form);
                     if (dialog == null) return;
                     timer.Stop();
-                    sawPath = Descendants(dialog).OfType<TextBox>().Single().Lines.SequenceEqual([path]);
+                    displayedPath = Descendants(dialog).OfType<TextBox>().Single().Text;
                     dialog.DialogResult = accept ? DialogResult.OK : DialogResult.Cancel;
                 };
                 timer.Start();
                 choose();
-                if (!sawPath) throw new Exception("Wrong file in the delete confirmation.");
+                if (displayedPath != path) throw new Exception($"Expected confirmation for {path}, got {displayedPath ?? "(no dialog)"}.");
                 Ready();
             }
             void ClickPicture(PictureBox box)
@@ -109,18 +110,25 @@ internal static class ReviewChecks
         WaitFor(() => save.Enabled && list.SelectedItems.Count == files.Length);
         list.SelectedItems.Clear();
         list.Items[5].Selected = true;
-        var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == 6);
+        var action = controls.OfType<ComboBox>().Single(box => box.Items.Count == Program.Actions.Length);
         void CheckRows()
         {
             WaitFor(() => refresh.Enabled && list.Items.Count == files.Length);
             if (list.SelectedItems.Count != 1 || !Descendants(form).OfType<Label>().Any(label => label.Text == Path.GetFileName(files[5])))
                 throw new Exception("Changing an action lost the highlighted source.");
         }
-        foreach (int mode in new[] { 0, 1, 3, 4, 5, 2 })
+        foreach (int mode in new[] { 0, 1, 3, 4, 5, Program.ViewMetadata, Program.PrefixImageDate, 2 })
         {
             action.SelectedIndex = mode;
             if (mode != 5) CheckRows();
             if (overwrite.Visible != (mode is 2 or 3 or 4)) throw new Exception("Overwrite visible for wrong action.");
+            if (mode == Program.ViewMetadata)
+            {
+                var metadata = controls.OfType<TextBox>().Single(box => box.AccessibleName == "Image metadata");
+                WaitFor(() => metadata.Text.Contains(files[5]) && metadata.Text.Contains("Detected date"));
+                if (!metadata.ReadOnly || !metadata.Visible || save.Visible) throw new Exception("Metadata inspector is not read-only.");
+                continue;
+            }
             if (mode == 5)
             {
                 WaitFor(() => refresh.Enabled);
@@ -145,6 +153,7 @@ internal static class ReviewChecks
             {
                 if (mode == 4)
                 {
+                    if (!controls.OfType<Label>().Any(l => l.Visible && l.Text == "1 MB = 1,000 KB")) throw new Exception("Missing KB to MB explanation.");
                     var choice = controls.OfType<ComboBox>().Single(c => c.Items.Contains("Convert to WebP"));
                     if (!choice.Visible || choice.Text != "Do not convert file format" ||
                         !choice.Items.Cast<string>().SequenceEqual(["Do not convert file format", "Convert to JPG", "Convert to WebP", "Convert to PNG"]))

@@ -22,8 +22,8 @@ internal static class ExplorerChecks
             image.Write(Path.Combine(first.CreateSubdirectory("Nested").FullName, "nested.png"));
             File.WriteAllText(Path.Combine(first.FullName, "notes.txt"), "skip");
             foreach (string action in Program.Actions) CheckAction(paths, 2, action);
-            CheckAction([first.FullName], 1, Program.Actions[1]);
-            CheckAction([first.FullName, second.FullName], 2, Program.Actions[2]);
+            CheckAction([first.FullName], 2, Program.Actions[1]);
+            CheckAction([first.FullName, second.FullName], 3, Program.Actions[2]);
         }
         finally { dir.Delete(true); }
     }
@@ -48,7 +48,7 @@ internal static class ExplorerChecks
             if (sub == 0) throw new Exception("Missing ImageChecker submenu");
             if (context is IContextMenu2 lazy) lazy.HandleMenuMsg(0x0117, sub, 0);
             int verb = Find(sub, action);
-            if (GetMenuItemCount(sub) != 6) throw new Exception("Expected six ImageChecker verbs.");
+            if (GetMenuItemCount(sub) != Program.Actions.Length) throw new Exception("Explorer menu is missing actions.");
             var old = Process.GetProcessesByName("ImageChecker").Select(p => p.Id).ToHashSet();
             var info = new InvokeInfo { Size = Marshal.SizeOf<InvokeInfo>(), Verb = (nint)(GetMenuItemID(sub, verb) - 1), Show = 1 };
             context.InvokeCommand(ref info);

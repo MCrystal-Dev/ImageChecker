@@ -83,19 +83,35 @@ internal static class Operations
                     }
                     else
                     {
-                        string suffix = options.Action switch { 0 => "", 2 => "-converted", 3 => "-resized", 4 => "-limited", _ => throw new ArgumentException("Unknown action.") };
-                        string outputStem = options.Action == 0 ? $"{plan.Day}_{stem}" : stem + suffix;
+                        details = "Rename";
+                        string outputStem;
+                        if (options.Action == Program.PrefixImageDate)
+                        {
+                            var date = ImageMetadata.Read(src, includeFields: false).Date;
+                            if (stem.StartsWith(date.Prefix + "_", StringComparison.Ordinal))
+                            {
+                                plan.Notes.Add($"{src} — Already starts with the detected date.");
+                                continue;
+                            }
+                            outputStem = $"{date.Prefix}_{stem}";
+                            details = date.Source;
+                        }
+                        else outputStem = options.Action switch
+                        {
+                            0 => $"{plan.Day}_{stem}", 2 => stem + "-converted", 3 => stem + "-resized",
+                            4 => stem + "-limited", _ => throw new ArgumentException("Unknown action.")
+                        };
                         if (options.Action == 2) ext = "." + options.Format.ToLowerInvariant();
                         if (options.Action == 4 && options.LimitFormat != null) ext = "." + options.LimitFormat.ToLowerInvariant();
-                        if (options.Action >= 2) directory = exportFolder ??= ExportFolder(directory, create: false);
+                        bool export = options.Action is 2 or 3 or 4;
+                        if (export) directory = exportFolder ??= ExportFolder(directory, create: false);
                         target = Path.Combine(directory, outputStem + ext);
                         for (int i = 2; Taken(target, used); i++)
                         {
                             collision = true;
                             target = Path.Combine(directory, $"{outputStem} ({i}){ext}");
                         }
-                        details = "Rename";
-                        if (options.Action >= 2)
+                        if (export)
                         {
                             staged = Path.Combine(plan.Temp.FullName, Guid.NewGuid().ToString("N") + ext);
                             details = Encode(src, staged, options);
