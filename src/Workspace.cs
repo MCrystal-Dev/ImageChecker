@@ -328,7 +328,8 @@ internal sealed class Workspace : Form
             {
                 var key = (path, Stamp.Read(path), box.ClientSize);
                 if (key.Equals(box.Tag)) return;
-                using var image = new MagickImage(path, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
+                using var input = File.OpenRead(path);
+                using var image = new MagickImage(input, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
                 image.AutoOrient(); image.Thumbnail((uint)Math.Max(1, box.ClientSize.Width), (uint)Math.Max(1, box.ClientSize.Height));
                 using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
                 using var decoded = new Bitmap(stream);

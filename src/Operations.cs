@@ -4,6 +4,7 @@ using System.Globalization;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Orientation = ImageMagick.Orientation;
 
 namespace ImageChecker;
 
@@ -141,7 +142,10 @@ internal static class Operations
                 if (!Path.Exists(path)) return path;
                 continue;
             }
-            if (CreateDirectoryW(path, 0)) return path;
+            string nativePath = path;
+            if (path.Length >= 248 && !path.StartsWith(@"\\?\", StringComparison.Ordinal))
+                nativePath = path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
+            if (CreateDirectoryW(nativePath, 0)) return path;
             int error = Marshal.GetLastWin32Error();
             if (error is not (80 or 183)) throw new IOException($"Could not create {path}.", new Win32Exception(error));
         }
@@ -170,13 +174,26 @@ internal static class Operations
 
     private static string Encode(string source, string dest, Options options)
     {
-        var settings = new MagickReadSettings { Format = FormatOf(source) };
-        using var frames = new MagickImageCollection();
-        frames.Ping(source, settings);
-        if (frames.Count != 1) throw new InvalidDataException("Animated or multi-frame image skipped.");
-        using var image = new MagickImage(source, settings);
-        image.AutoOrient();
+        var inputFormat = FormatOf(source);
         var format = FormatOf(dest);
+        var settings = new MagickReadSettings { Format = inputFormat, FrameCount = 2 };
+        using var input = File.OpenRead(source);
+        using var frames = new MagickImageCollection();
+        frames.Ping(input, settings);
+        if (frames.Count != 1) throw new InvalidDataException("Animated or multi-frame image skipped.");
+        input.Position = 0;
+        if (options.Action == 4 && format == inputFormat && input.Length < options.ByteLimit)
+        {
+            using var output = new FileStream(dest, FileMode.CreateNew, FileAccess.Write);
+            input.CopyTo(output);
+            var header = frames[0];
+            bool rotated = header.Orientation is Orientation.LeftTop or Orientation.RightTop
+                or Orientation.RightBottom or Orientation.LeftBottom;
+            return $"{(rotated ? header.Height : header.Width)} × {(rotated ? header.Width : header.Height)} px · {output.Length:N0} bytes";
+        }
+        settings.FrameCount = 1;
+        using var image = new MagickImage(input, settings);
+        image.AutoOrient();
         if (format == MagickFormat.Jpeg && image.HasAlpha)
         {
             image.BackgroundColor = MagickColors.White;
@@ -187,18 +204,9 @@ internal static class Operations
             var area = new MagickGeometry((uint)options.Width, (uint)options.Height) { Greater = true };
             image.Resize(area);
         }
-        if (options.Action == 4)
-        {
-            if (format != FormatOf(source) || new FileInfo(source).Length >= options.ByteLimit)
-                return SizeLimitedEncoder.Write(image, dest, format, options.ByteLimit);
-            File.Copy(source, dest);
-            if (new FileInfo(dest).Length >= options.ByteLimit) throw new IOException("Source changed during preview. Refresh to try again.");
-        }
-        else
-        {
-            image.Quality = 88;
-            image.Write(dest, format);
-        }
+        if (options.Action == 4) return SizeLimitedEncoder.Write(image, dest, format, options.ByteLimit);
+        image.Quality = 88;
+        image.Write(dest, format);
         return $"{image.Width} × {image.Height} px · {new FileInfo(dest).Length:N0} bytes";
     }
 

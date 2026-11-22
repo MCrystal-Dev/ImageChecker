@@ -14,6 +14,7 @@ internal static class Checks
     [STAThread]
     private static void Main(string[] args)
     {
+        ImageResources.Configure();
         if (args is ["--benchmark"]) { ScanBenchmark.Run(); return; }
         if (args is ["--explorer"]) { ExplorerChecks.Run(); return; }
         if (args is ["--review"] or ["--layout"])
@@ -47,6 +48,7 @@ internal static class Checks
             var pixels = new byte[320 * 240 * 3];
             new Random(47).NextBytes(pixels);
             using (var img = new MagickImage(pixels, new PixelReadSettings(320, 240, StorageType.Char, PixelMapping.RGB))) img.Write(src);
+            CheckLimitsAndLongPaths(folder, src);
             CheckImageDates(folder);
             CheckSizeLimits(src);
             string copy = Path.Combine(folder.FullName, "second.png");
@@ -124,6 +126,28 @@ internal static class Checks
             Registry.CurrentUser.DeleteSubKeyTree(keyName);
             folder.Delete(true);
         }
+    }
+
+    private static void CheckLimitsAndLongPaths(DirectoryInfo folder, string source)
+    {
+        var options = new Options(4, "PNG", 0, 0, 1_000_000);
+        var originalLimit = ResourceLimits.Width;
+        try
+        {
+            ResourceLimits.Width = 319;
+            using var restricted = Operations.Preview([source], options);
+            Check(restricted.Changes.Count == 0 && restricted.Notes.Count == 1, "Decoder must reject images wider than its configured limit");
+        }
+        finally { ResourceLimits.Width = originalLimit; }
+
+        var nested = folder.CreateSubdirectory(new string('a', 120)).CreateSubdirectory(new string('b', 120));
+        string path = Path.Combine(nested.FullName, "échantillon.png");
+        File.Copy(source, path);
+        using var plan = Operations.Preview([path], options);
+        Check(plan.Changes.Count == 1, "Long Unicode input path: " + string.Join(", ", plan.Notes));
+        var result = Operations.Apply(plan, options.Action);
+        Check(result.Done == 1 && File.ReadAllBytes(result.Completed[0].Target).SequenceEqual(File.ReadAllBytes(source)),
+            "Long export path: " + string.Join(", ", result.Errors));
     }
 
     private static void CheckImageDates(DirectoryInfo folder)

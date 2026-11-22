@@ -58,6 +58,7 @@ internal static class Program
                 ShellMenu.Register(args[0] == "--install");
                 return 0;
             }
+            ImageResources.Configure();
             if (args.Length >= 2 && args[0] == "--shell" && int.TryParse(args[1], out int action))
             {
                 ShellMenu.Listen(action);

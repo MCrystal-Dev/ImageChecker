@@ -36,7 +36,7 @@ For a size limit, ImageChecker keeps the original bytes if the format already ma
 
 **Overwrite** permanently replaces the selected originals with the previewed images. Review the paths and click **OK** to proceed or **Cancel** to keep the originals. Format changes keep the base name and use the new format's extension. If that name is already occupied by another file, ImageChecker skips that replacement and reports it.
 
-Image export supports still images. Visual matching compares the proportions, colors and transparency of still images to find resized or re-encoded copies. Animated images are compared by exact file contents.
+Image export supports still images. Decoding is limited to 20,000 pixels per side and subject to memory, disk cache and embedded profile limits. Visual matching compares the proportions, colors and transparency of still images to find resized or re-encoded copies. Animated images are compared by exact file contents.
 
 ## Build
 
