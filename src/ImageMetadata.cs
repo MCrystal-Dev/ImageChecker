@@ -37,9 +37,9 @@ internal sealed record ImageMetadata(ImageDate Date, string Text)
         try
         {
             var settings = new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 };
-            // PNG writers may store text and profiles after the pixel data, beyond a header-only read.
-            if (settings.Format == MagickFormat.Png) image.Read(path, settings);
-            else image.Ping(path, settings);
+            // PNG text and WebP metadata chunks can follow the pixels, beyond a header-only read.
+            if (settings.Format == MagickFormat.Jpeg) image.Ping(path, settings);
+            else image.Read(path, settings);
             var exif = image.GetExifProfile();
             XDocument? packet = null;
             if (image.GetXmpProfile() is {} profile)

@@ -161,7 +161,7 @@ internal static class Checks
         var gen = ImageMetadata.Read(generated);
         Check(gen.Date.Prefix == "2025-05-04", "Embedded PNG creation date: " + gen.Text);
         var download = ImageMetadata.Read(acquired);
-        Check(download.Date.Prefix == "2020-01-02" && download.Date.Source.Contains("acquired"), "XMP date acquired: " + download.Text);
+        Check(download.Date.Prefix == "2020-01-02" && download.Date.Source == "Date acquired (XMP)", "XMP date acquired: " + download.Text);
         Check(ImageMetadata.Read(plain).Date.Source.Contains("estimate"), "Missing metadata needs a labeled estimate");
         byte[] original = File.ReadAllBytes(photo);
         File.WriteAllText(Path.Combine(parent.FullName, "2014-07-06_camera.jpg"), "occupied");
