@@ -7,7 +7,7 @@ internal static class SizeLimitedEncoder
     // Keep the original pixel dimensions when a reasonable lossy quality fits.
     private const int MinimumQuality = 60;
 
-    internal static string Write(MagickImage original, string destination, MagickFormat format, long limit)
+    internal static string Write(MagickImage original, string destination, MagickFormat format, long limit, CancellationToken cancellation)
     {
         bool png = format == MagickFormat.Png;
         bool webp = format == MagickFormat.WebP;
@@ -16,6 +16,7 @@ internal static class SizeLimitedEncoder
 
         bool Fits(IMagickImage<byte> image, int quality)
         {
+            cancellation.ThrowIfCancellationRequested();
             image.Quality = (uint)quality;
             image.Write(trial, format);
             long length = new FileInfo(trial).Length;

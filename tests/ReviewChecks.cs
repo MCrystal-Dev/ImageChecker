@@ -28,8 +28,9 @@ internal static class ReviewChecks
             {
                 Application.DoEvents();
                 var deadline = DateTime.UtcNow.AddSeconds(15);
-                while (!refresh.Enabled && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(10); }
-                if (!refresh.Enabled) throw new Exception("Duplicate review timed out.");
+                bool ReadyToReview() => refresh.Enabled && (!keep.Enabled || pictures.All(box => box.Image != null));
+                while (!ReadyToReview() && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(10); }
+                if (!ReadyToReview()) throw new Exception("Duplicate review timed out.");
             }
             void Confirm(Action choose, string path, bool accept)
             {

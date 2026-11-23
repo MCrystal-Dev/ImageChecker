@@ -44,9 +44,13 @@ internal sealed class Workspace : Form
     private bool previewPending;
     private bool selectionPending;
     private bool loading;
+    private bool closing;
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? previewCancellation;
     private Task activePreview = Task.CompletedTask;
+    private Task previewWork = Task.CompletedTask;
+    private Task thumbnailWork = Task.CompletedTask;
+    private (string? Left, Size LeftSize, string? Right, Size RightSize)? thumbnailRequest;
     private Change? requestedPreview;
     private Change? stagedPreview;
     private int Mode => action.SelectedIndex;
@@ -150,12 +154,13 @@ internal sealed class Workspace : Form
         }
         rows.SelectedIndexChanged += (_, _) =>
         {
-            if (selectionPending) return;
+            if (closing || selectionPending) return;
             selectionPending = true;
             if (!busy && Mode != 5) apply.Enabled = overwrite.Enabled = false;
             BeginInvoke(() =>
             {
                 selectionPending = false;
+                if (closing) return;
                 if (!busy) UpdateSelection();
                 else UpdateCount();
             });
@@ -178,15 +183,7 @@ internal sealed class Workspace : Form
         Configure();
         ResumeLayout(true);
         Shown += async (_, _) => await LoadSelection(paths);
-        FormClosing += async (_, e) =>
-        {
-            e.Cancel = busy && !loading;
-            if (e.Cancel || activePreview.IsCompleted) return;
-            e.Cancel = true;
-            requestedPreview = null;
-            await activePreview;
-            if (!IsDisposed) Close();
-        };
+        FormClosing += ClosePreviews;
         FormClosed += (_, _) =>
         {
             lifetime.Cancel();
@@ -197,6 +194,28 @@ internal sealed class Workspace : Form
             ClearPictures();
             plan?.Dispose();
         };
+    }
+
+    private async void ClosePreviews(object? sender, FormClosingEventArgs e)
+    {
+        if (closing)
+        {
+            e.Cancel = !previewWork.IsCompleted || !activePreview.IsCompleted || !thumbnailWork.IsCompleted;
+            return;
+        }
+        // Let file changes finish. Preview work can be canceled without affecting originals.
+        e.Cancel = busy && !loading && previewWork.IsCompleted;
+        if (e.Cancel || (previewWork.IsCompleted && activePreview.IsCompleted && thumbnailWork.IsCompleted)) return;
+
+        e.Cancel = true;
+        closing = true;
+        Hide();
+        editDelay.Stop();
+        lifetime.Cancel();
+        previewCancellation?.Cancel();
+        requestedPreview = null;
+        await Task.WhenAll(previewWork, activePreview, thumbnailWork);
+        if (!IsDisposed) Close();
     }
     private void UpdateTitle() => Text = loading ? "ImageChecker — Scanning folders…" :
         $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
@@ -226,12 +245,12 @@ internal sealed class Workspace : Form
             {
                 var token = lifetime.Token;
                 files = await Task.Run(() => Program.ResolveImages(paths, token), token);
-                if (IsDisposed) return;
+                if (closing || IsDisposed) return;
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
-                if (IsDisposed) return;
+                if (closing || IsDisposed) return;
                 MessageBox.Show(this, ex.Message, "Could not read the selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             loading = busy = false;
@@ -313,7 +332,9 @@ internal sealed class Workspace : Form
     }
     private void ClearPictures()
     {
-        Thumb(before, null); Thumb(after, null);
+        thumbnailRequest = null;
+        SetThumbnail(before, null, null);
+        SetThumbnail(after, null, null);
         leftTitle.Text = rightTitle.Text = "";
     }
     private void Reset()
@@ -360,20 +381,20 @@ internal sealed class Workspace : Form
         }
         leftTitle.Text = Path.GetFileName(leftPath) ?? "";
         rightTitle.Text = Path.GetFileName(outputName ?? rightPath) ?? "";
-        Thumb(before, leftPath);
-        Thumb(after, rightPath);
+        ShowThumbnails(leftPath, rightPath);
         if (Mode == Program.ViewMetadata && !busy) ShowMetadata(leftPath);
     }
 
     private async Task PreviewRow(ListViewItem item, Plan currentPlan, Change change, Task previous)
     {
         await previous;
-        if (IsDisposed || !ReferenceEquals(requestedPreview, change)) return;
+        if (closing || IsDisposed || !ReferenceEquals(requestedPreview, change)) return;
         rightRole.Text = "Preparing preview…";
         try
         {
-            var result = await Task.Run(() => Operations.Stage(currentPlan, change));
-            if (IsDisposed || !ReferenceEquals(requestedPreview, change))
+            var token = lifetime.Token;
+            var result = await Task.Run(() => Operations.Stage(currentPlan, change, token));
+            if (closing || IsDisposed || !ReferenceEquals(requestedPreview, change))
             {
                 File.Delete(result.Staged!);
                 return;
@@ -381,17 +402,17 @@ internal sealed class Workspace : Form
             string? oldPath = stagedPreview?.Staged;
             stagedPreview = result;
             item.SubItems[2].Text = result.Details;
-            Thumb(after, result.Staged);
+            ShowPair();
             if (oldPath != null) File.Delete(oldPath);
         }
         catch (Exception ex)
         {
-            if (!IsDisposed && ReferenceEquals(requestedPreview, change))
+            if (!closing && !IsDisposed && ReferenceEquals(requestedPreview, change))
                 item.SubItems[2].Text = ex.Message;
         }
         finally
         {
-            if (!IsDisposed && ReferenceEquals(requestedPreview, change)) rightRole.Text = "Preview";
+            if (!closing && !IsDisposed && ReferenceEquals(requestedPreview, change)) rightRole.Text = "Preview";
         }
     }
     private async void ShowMetadata(string? path)
@@ -404,7 +425,7 @@ internal sealed class Workspace : Form
         string text;
         try { text = await Task.Run(() => ImageMetadata.Read(path).Text); }
         catch (Exception ex) { text = $"Could not read metadata. {ex.Message}"; }
-        if (!IsDisposed && request == metadataRequest && Mode == Program.ViewMetadata) metadata.Text = text;
+        if (!closing && !IsDisposed && request == metadataRequest && Mode == Program.ViewMetadata) metadata.Text = text;
     }
     private ListViewItem? ActiveRow() => rows.FocusedItem is { Selected: true } focused
         ? focused : rows.SelectedItems.Cast<ListViewItem>().FirstOrDefault();
@@ -446,28 +467,57 @@ internal sealed class Workspace : Form
         }
         ShowPair();
     }
-    private static void Thumb(PictureBox box, string? path)
+    private void ShowThumbnails(string? left, string? right)
     {
-        Bitmap? next = null;
+        var request = (left, before.ClientSize, right, after.ClientSize);
+        if (request == thumbnailRequest) return;
+        if (!Equals(before.Tag, (left, before.ClientSize))) SetThumbnail(before, null, null);
+        if (!Equals(after.Tag, (right, after.ClientSize))) SetThumbnail(after, null, null);
+        thumbnailRequest = request;
+        thumbnailWork = RenderThumbnails(request, thumbnailWork);
+    }
+
+    private async Task RenderThumbnails((string? Left, Size LeftSize, string? Right, Size RightSize) request, Task previous)
+    {
+        await previous;
+        if (closing || IsDisposed || request != thumbnailRequest) return;
+
+        async Task Render(PictureBox box, string? path, Size size)
+        {
+            var key = (path, size);
+            if (key.Equals(box.Tag)) return;
+            SetThumbnail(box, null, null);
+            if (path == null) return;
+            Bitmap? bitmap = await Task.Run(() => LoadThumbnail(path, size));
+            if (closing || IsDisposed || request != thumbnailRequest) bitmap?.Dispose();
+            else SetThumbnail(box, bitmap, key);
+        }
+
+        await Render(before, request.Left, request.LeftSize);
+        if (!closing && !IsDisposed && request == thumbnailRequest)
+            await Render(after, request.Right, request.RightSize);
+    }
+
+    private static Bitmap? LoadThumbnail(string path, Size size)
+    {
         try
         {
-            if (path != null)
-            {
-                var key = (path, Stamp.Read(path), box.ClientSize);
-                if (key.Equals(box.Tag)) return;
-                using var input = File.OpenRead(path);
-                using var image = new MagickImage(input, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
-                image.AutoOrient(); image.Thumbnail((uint)Math.Max(1, box.ClientSize.Width), (uint)Math.Max(1, box.ClientSize.Height));
-                using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
-                using var decoded = new Bitmap(stream);
-                next = new Bitmap(decoded);
-                box.Tag = key;
-            }
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var image = new MagickImage(input, new MagickReadSettings { Format = Operations.FormatOf(path), FrameCount = 1 });
+            image.AutoOrient();
+            image.Thumbnail((uint)Math.Max(1, size.Width), (uint)Math.Max(1, size.Height));
+            using var stream = new MemoryStream(image.ToByteArray(MagickFormat.Png));
+            using var decoded = new Bitmap(stream);
+            return new Bitmap(decoded);
         }
-        catch (Exception) { /* A damaged image can still be renamed or compared by its bytes. */ }
+        catch (Exception) { return null; }
+    }
+
+    private static void SetThumbnail(PictureBox box, Bitmap? next, object? key)
+    {
         var previous = box.Image;
         box.Image = next;
-        if (next == null) box.Tag = null;
+        box.Tag = key;
         previous?.Dispose();
     }
     private void Working(bool on, bool previewing = false)
@@ -482,21 +532,31 @@ internal sealed class Workspace : Form
         keepBoth.Enabled = deleteLeft.Enabled = deleteRight.Enabled = !on && Mode == 5 && review?.Current != null;
         if (!on) UpdateSelection();
     }
-    private async Task Preview(HashSet<string>? selection = null, bool initialSelection = false)
+    private Task Preview(HashSet<string>? selection = null, bool initialSelection = false)
     {
+        if (closing) return Task.CompletedTask;
         editDelay.Stop();
         if (busy)
         {
             previewPending = true;
             previewCancellation?.Cancel();
-            return;
+            return Task.CompletedTask;
         }
+        previewWork = BuildPreview(selection, initialSelection);
+        return previewWork;
+    }
+
+    private async Task BuildPreview(HashSet<string>? selection, bool initialSelection)
+    {
         Working(true, previewing: true);
         SetStatus("Preparing preview…", initialSelection ? files.Length : null);
         try
         {
             requestedPreview = stagedPreview = null;
+            thumbnailRequest = null;
+            before.Tag = after.Tag = null;
             await activePreview;
+            if (closing) return;
             rightRole.Text = Mode == Program.ViewMetadata ? "Metadata" : Mode == 5 ? "Right" : "Preview";
             if (rows.Items.Count == 0 && Mode != 5 && files.Length < LargeBatch)
             {
@@ -519,7 +579,8 @@ internal sealed class Workspace : Form
                     reviewMessage.Text = "Looking for matches…";
                     DuplicateReview scanned;
                     try { scanned = await Task.Run(() => new DuplicateReview(files, cancellation.Token)); }
-                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { continue; }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { if (closing) return; continue; }
+                    if (closing) return;
                     if (previewPending) continue;
                     review = scanned;
                     UpdateReviewStatus();
@@ -537,7 +598,8 @@ internal sealed class Workspace : Form
                     string? convertTo = limitFormat.SelectedIndex > 0 ? LimitFormats[limitFormat.SelectedIndex - 1] : null;
                     var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000, convertTo);
                     try { plan = await Task.Run(() => Operations.Preview(files, settings, files.Length >= LargeBatch, cancellation.Token)); }
-                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { continue; }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { if (closing) return; continue; }
+                    if (closing) return;
                     if (previewPending) continue;
                     foreach (var c in plan.Changes)
                         items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
@@ -558,8 +620,14 @@ internal sealed class Workspace : Form
                 finally { rows.EndUpdate(); }
             } while (previewPending);
         }
-        catch (Exception ex) { Reset(); SetStatus("Preview failed."); MessageBox.Show(this, ex.Message, "Preview failed"); }
-        finally { previewCancellation = null; Working(false); }
+        catch (Exception ex)
+        {
+            if (closing) return;
+            Reset();
+            SetStatus("Preview failed.");
+            MessageBox.Show(this, ex.Message, "Preview failed");
+        }
+        finally { previewCancellation = null; if (!closing) Working(false); }
     }
     private void RestoreSelection(HashSet<string> selection, string? focusedSource)
     {
@@ -582,7 +650,7 @@ internal sealed class Workspace : Form
     };
     private async Task Apply(bool replaceOriginals = false)
     {
-        if (busy) return;
+        if (closing || busy) return;
         if (Mode == 5) return;
         if (plan == null || selectionPending || editDelay.Enabled) return;
         var selected = rows.SelectedItems.Cast<ListViewItem>().OrderBy(item => item.Index)
@@ -643,7 +711,7 @@ internal sealed class Workspace : Form
 
     private async Task DecidePair(bool? deleteLeftSide)
     {
-        if (busy || Mode != 5 || review?.Current is not {} pair) return;
+        if (closing || busy || Mode != 5 || review?.Current is not {} pair) return;
         if (deleteLeftSide.HasValue)
         {
             var target = deleteLeftSide.Value ? pair.Left : pair.Right;

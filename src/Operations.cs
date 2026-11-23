@@ -123,14 +123,15 @@ internal static class Operations
                         else if (export)
                         {
                             staged = Path.Combine(plan.Temp.FullName, Guid.NewGuid().ToString("N") + ext);
-                            details = Encode(src, staged, options);
+                            details = Encode(src, staged, options, cancellation);
                         }
                     }
                     used.Add(target);
                     plan.Changes.Add(new(src, target, stamp, details + (collision ? " · name in use, next free name shown" : ""), staged));
                 }
-                catch (Exception ex) { plan.Notes.Add($"{src} — {ex.Message}"); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { plan.Notes.Add($"{src} — {ex.Message}"); }
             }
+            cancellation.ThrowIfCancellationRequested();
             return plan;
         }
         catch { plan.Dispose(); throw; }
@@ -162,13 +163,15 @@ internal static class Operations
     internal static string OverwriteTarget(Change row) =>
         FormatOf(row.Source) == FormatOf(row.Target) ? row.Source : Path.ChangeExtension(row.Source, Path.GetExtension(row.Target));
 
-    internal static Change Stage(Plan plan, Change row)
+    internal static Change Stage(Plan plan, Change row, CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         if (row.Original != Stamp.Read(row.Source)) throw new IOException("Source changed since preview.");
         string staged = Path.Combine(plan.Temp.FullName, Guid.NewGuid().ToString("N") + Path.GetExtension(row.Target));
         try
         {
-            string details = Encode(row.Source, staged, plan.DeferredExport!);
+            string details = Encode(row.Source, staged, plan.DeferredExport!, cancellation);
+            cancellation.ThrowIfCancellationRequested();
             return row with { Staged = staged, Details = details };
         }
         catch { File.Delete(staged); throw; }
@@ -192,7 +195,7 @@ internal static class Operations
         _ => throw new InvalidDataException("Choose a PNG, JPG, or WebP image.")
     };
 
-    private static string Encode(string source, string dest, Options options)
+    private static string Encode(string source, string dest, Options options, CancellationToken cancellation)
     {
         var inputFormat = FormatOf(source);
         var format = FormatOf(dest);
@@ -200,6 +203,7 @@ internal static class Operations
         using var input = File.OpenRead(source);
         using var frames = new MagickImageCollection();
         frames.Ping(input, settings);
+        cancellation.ThrowIfCancellationRequested();
         if (frames.Count != 1) throw new InvalidDataException("Animated or multi-frame image skipped.");
         input.Position = 0;
         if (options.Action == 4 && format == inputFormat && input.Length < options.ByteLimit)
@@ -213,6 +217,7 @@ internal static class Operations
         }
         settings.FrameCount = 1;
         using var image = new MagickImage(input, settings);
+        cancellation.ThrowIfCancellationRequested();
         image.AutoOrient();
         if (format == MagickFormat.Jpeg && image.HasAlpha)
         {
@@ -224,7 +229,7 @@ internal static class Operations
             var area = new MagickGeometry((uint)options.Width, (uint)options.Height) { Greater = true };
             image.Resize(area);
         }
-        if (options.Action == 4) return SizeLimitedEncoder.Write(image, dest, format, options.ByteLimit);
+        if (options.Action == 4) return SizeLimitedEncoder.Write(image, dest, format, options.ByteLimit, cancellation);
         image.Quality = 88;
         image.Write(dest, format);
         return $"{image.Width} × {image.Height} px · {new FileInfo(dest).Length:N0} bytes";

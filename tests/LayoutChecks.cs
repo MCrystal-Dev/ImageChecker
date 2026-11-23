@@ -68,9 +68,30 @@ internal static class LayoutChecks
             Application.DoEvents();
             if (!count.Text.StartsWith("1 of 2 images selected", StringComparison.Ordinal)) throw new Exception("Selection count did not update.");
             form.Close();
+            CheckCloseDuringPreview(first, second);
             CheckLargeFolder(dir, first);
         }
         finally { dir.Delete(true); }
+    }
+
+    private static void CheckCloseDuringPreview(string first, string second)
+    {
+        using var form = new Workspace([first, second], 4);
+        var refresh = Children(form).OfType<Button>().Single(button => button.Text == "Refresh");
+        bool closedDuringPreview = false;
+        form.Shown += (_, _) =>
+        {
+            closedDuringPreview = !refresh.Enabled;
+            form.Close();
+            if (form.Visible) throw new Exception("Close left the window visible during preview.");
+            if (!form.IsDisposed) form.Close();
+        };
+        form.Show();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!form.IsDisposed && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(5); }
+        if (!closedDuringPreview || !form.IsDisposed || !File.Exists(first) || !File.Exists(second))
+            throw new Exception("Preview did not cancel and close cleanly.");
+        Console.WriteLine("Closed during preview and preserved both originals.");
     }
 
     private static void CheckLargeFolder(DirectoryInfo root, string sample)
