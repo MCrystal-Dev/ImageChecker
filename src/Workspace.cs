@@ -34,8 +34,8 @@ internal sealed class Workspace : Form
     private readonly Button apply = new() { Text = "Apply", AutoSize = true, Enabled = false };
     private readonly Button overwrite = new() { Text = "Overwrite", AutoSize = true, Enabled = false };
     private readonly Button keepBoth = new() { Text = "Keep both", AutoSize = true };
-    private readonly Button deleteLeft = new() { Text = "Delete Left", AutoSize = true };
-    private readonly Button deleteRight = new() { Text = "Delete Right", AutoSize = true };
+    private readonly Button keepLeft = new() { Text = "Keep Left", AutoSize = true };
+    private readonly Button keepRight = new() { Text = "Keep Right", AutoSize = true };
     private readonly Button giveAdmin = new() { Text = "Give admin", AutoSize = true };
     private readonly Label reviewMessage = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Appearance.Secondary };
     private readonly RowStyle imageListHeight = new(SizeType.Percent, 48);
@@ -136,14 +136,14 @@ internal sealed class Workspace : Form
         Appearance.StyleButton(overwrite);
         Appearance.StyleButton(apply, primary: true);
         Appearance.StyleButton(keepBoth, primary: true);
-        Appearance.StyleButton(deleteLeft);
-        Appearance.StyleButton(deleteRight);
+        Appearance.StyleButton(keepLeft);
+        Appearance.StyleButton(keepRight);
         Appearance.StyleButton(giveAdmin);
         if (adminEnabled) giveAdmin.Text = "Admin enabled";
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
         footer.RowStyles.Add(new(SizeType.AutoSize));
         footer.RowStyles.Add(new(SizeType.AutoSize));
-        foreach (Button button in new[] { selectAll, preview, overwrite, apply, deleteLeft, keepBoth, deleteRight })
+        foreach (Button button in new[] { selectAll, preview, overwrite, apply, keepLeft, keepBoth, keepRight })
         {
             buttons.Controls.Add(button);
         }
@@ -181,11 +181,11 @@ internal sealed class Workspace : Form
             e.SuppressKeyPress = true;
         };
         keepBoth.Click += async (_, _) => await DecidePair(null);
-        deleteLeft.Click += async (_, _) => await DecidePair(true);
-        deleteRight.Click += async (_, _) => await DecidePair(false);
+        keepLeft.Click += async (_, _) => await DecidePair(true);
+        keepRight.Click += async (_, _) => await DecidePair(false);
         giveAdmin.Click += async (_, _) => await GiveAdmin();
-        before.Click += async (_, _) => await DecidePair(true);
-        after.Click += async (_, _) => await DecidePair(false);
+        before.MouseClick += async (_, e) => { if (e.Button == MouseButtons.Left && before.Image != null) await DecidePair(true); };
+        after.MouseClick += async (_, e) => { if (e.Button == MouseButtons.Left && after.Image != null) await DecidePair(false); };
         preview.Click += async (_, _) => await Preview();
         apply.Click += async (_, _) => await Apply();
         overwrite.Click += async (_, _) => await Apply(replaceOriginals: true);
@@ -322,7 +322,14 @@ internal sealed class Workspace : Form
         after.Visible = !inspecting;
         rows.Columns[1].Text = inspecting ? "Folder" : "Output";
         rows.Columns[2].Text = inspecting ? "File type" : "Details";
-        keepBoth.Visible = deleteLeft.Visible = deleteRight.Visible = comparing;
+        keepBoth.Visible = keepLeft.Visible = keepRight.Visible = comparing;
+        if (comparing)
+        {
+            fileTips.SetToolTip(before, "Keep left and move right to the Recycle Bin");
+            fileTips.SetToolTip(after, "Keep right and move left to the Recycle Bin");
+            fileTips.SetToolTip(keepLeft, "Move the right image to the Recycle Bin");
+            fileTips.SetToolTip(keepRight, "Move the left image to the Recycle Bin");
+        }
         before.Cursor = after.Cursor = comparing ? Cursors.Hand : Cursors.Default;
         reviewMessage.Visible = comparing;
         reviewMessage.Text = "Looking for matches…";
@@ -540,7 +547,7 @@ internal sealed class Workspace : Form
         selectAll.Enabled = !on && rows.Items.Count > 0;
         overwrite.Enabled = false;
         apply.Enabled = false;
-        keepBoth.Enabled = deleteLeft.Enabled = deleteRight.Enabled = !on && Mode == 5 && review?.Current != null;
+        keepBoth.Enabled = keepLeft.Enabled = keepRight.Enabled = !on && Mode == Program.FindDuplicates && review?.Current != null;
         if (!on) UpdateSelection();
     }
 
@@ -740,31 +747,24 @@ internal sealed class Workspace : Form
         var pair = review?.Current;
         reviewMessage.Visible = pair == null;
         reviewMessage.Text = review?.Reviewed > 0 ? "Review complete" : "No matching pairs found";
-        string message = pair != null ? $"{(pair.Exact ? "Exact copies" : "Visually similar")} · Click an image to choose it for deletion."
+        string message = pair != null ? $"{(pair.Exact ? "Exact copies" : "Visually similar")} · Keep one to recycle the other."
             : $"{review?.Reviewed ?? 0} pairs reviewed.";
         if (review?.Notes.Count > 0) message += $" · {review.Notes.Count} scan warnings";
         SetStatus(message);
         fileTips.SetToolTip(status, review == null ? "" : string.Join(Environment.NewLine, review.Notes.Take(5)));
     }
 
-    private async Task DecidePair(bool? deleteLeftSide)
+    private async Task DecidePair(bool? keepLeftSide)
     {
-        if (closing || busy || Mode != 5 || review?.Current is not {} pair) return;
-        if (deleteLeftSide.HasValue)
-        {
-            var target = deleteLeftSide.Value ? pair.Left : pair.Right;
-            string side = deleteLeftSide.Value ? "left" : "right";
-            if (!Details($"Delete the {side} image?", [target.Path], "Move to Recycle Bin",
-                $"Move the {side} image to the Recycle Bin? The other image will be kept.")) return;
-        }
+        if (closing || busy || Mode != Program.FindDuplicates || review?.Current is not {} pair) return;
         Working(true);
         try
         {
             string? recycled = null;
-            if (deleteLeftSide is bool left)
+            if (keepLeftSide is bool keepLeft)
             {
-                pair.RecycleSide(left, Handle);
-                recycled = left ? pair.Left.Path : pair.Right.Path;
+                pair.RecycleSide(!keepLeft, Handle);
+                recycled = keepLeft ? pair.Right.Path : pair.Left.Path;
                 files = files.Where(path => !Operations.Names.Equals(path, recycled)).ToArray();
                 UpdateTitle();
             }

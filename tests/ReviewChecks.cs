@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 internal static class ReviewChecks
 {
-    // UI regression: scanning, checking a copy, and cancelling must all preserve both files.
+    // Duplicate review operates on temporary images and moves rejected copies to the Recycle Bin.
     internal static void Run()
     {
         var dir = Directory.CreateTempSubdirectory("ImageChecker-review-");
@@ -20,8 +20,8 @@ internal static class ReviewChecks
             form.Location = Screen.PrimaryScreen!.WorkingArea.Location;
             var controls = Descendants(form).ToArray();
             var keep = controls.OfType<Button>().Single(b => b.Text == "Keep both");
-            var left = controls.OfType<Button>().Single(b => b.Text == "Delete Left");
-            var right = controls.OfType<Button>().Single(b => b.Text == "Delete Right");
+            var left = controls.OfType<Button>().Single(b => b.Text == "Keep Left");
+            var right = controls.OfType<Button>().Single(b => b.Text == "Keep Right");
             var refresh = controls.OfType<Button>().Single(b => b.Text == "Refresh");
             var pictures = controls.OfType<PictureBox>().OrderBy(box => box.PointToScreen(Point.Empty).X).ToArray();
             void Ready()
@@ -32,22 +32,23 @@ internal static class ReviewChecks
                 while (!ReadyToReview() && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(10); }
                 if (!ReadyToReview()) throw new Exception("Duplicate review timed out.");
             }
-            void Confirm(Action choose, string path, bool accept)
+            void Choose(Action choose)
             {
-                string? displayedPath = null;
+                string? dialogTitle = null;
                 using var timer = new System.Windows.Forms.Timer { Interval = 50 };
                 timer.Tick += (_, _) =>
                 {
                     var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f != form);
                     if (dialog == null) return;
                     timer.Stop();
-                    displayedPath = Descendants(dialog).OfType<TextBox>().Single().Text;
-                    dialog.DialogResult = accept ? DialogResult.OK : DialogResult.Cancel;
+                    dialogTitle = dialog.Text;
+                    dialog.DialogResult = DialogResult.Cancel;
+                    dialog.Close();
                 };
                 timer.Start();
                 choose();
-                if (displayedPath != path) throw new Exception($"Expected confirmation for {path}, got {displayedPath ?? "(no dialog)"}.");
                 Ready();
+                if (dialogTitle != null) throw new Exception($"Choosing an image opened a dialog: {dialogTitle}");
             }
             void ClickPicture(PictureBox box)
             {
@@ -58,16 +59,20 @@ internal static class ReviewChecks
             Ready();
             if (!keep.Enabled || !left.Enabled || !right.Enabled || pictures.Any(box => box.Image == null))
                 throw new Exception("Pair was not automatically displayed.");
-            Confirm(() => ClickPicture(pictures[0]), second, false);
-            Confirm(right.PerformClick, first, false);
-            keep.PerformClick();
-            Ready();
+            Choose(() =>
+            {
+                PostMessage(pictures[0].Handle, 0x204, 2, 0x000a000a);
+                PostMessage(pictures[0].Handle, 0x205, 0, 0x000a000a);
+                Application.DoEvents();
+            });
+            if (!File.Exists(first) || !File.Exists(second)) throw new Exception("Right-clicking recycled an image.");
+            Choose(keep.PerformClick);
             if (!File.Exists(first) || !File.Exists(second) || !File.Exists(third)) throw new Exception("Keep both modified files.");
-            Confirm(left.PerformClick, second, true);
-            if (File.Exists(second) || !File.Exists(third)) throw new Exception("Delete Left recycled the wrong file.");
-            Confirm(() => ClickPicture(pictures[1]), third, true);
+            Choose(right.PerformClick);
+            if (File.Exists(second) || !File.Exists(third)) throw new Exception("Keep Right recycled the wrong file.");
+            Choose(() => ClickPicture(pictures[0]));
             if (File.Exists(third) || !File.Exists(first) || keep.Enabled || left.Enabled || right.Enabled)
-                throw new Exception("Delete Right or end of queue failed.");
+                throw new Exception("Clicking the left image did not keep it and advance the review.");
             refresh.PerformClick();
             Ready();
             if (!controls.OfType<Label>().Any(l => l.Visible && l.Text == "No matching pairs found"))
@@ -81,8 +86,15 @@ internal static class ReviewChecks
                 }
                 catch (IOException) when (File.Exists(first)) { }
             }
+            string newCopy = Path.Combine(dir.FullName, "new-copy.png");
+            File.Copy(first, newCopy);
+            refresh.PerformClick();
+            Ready();
+            Choose(() => ClickPicture(pictures[1]));
+            if (File.Exists(first) || !File.Exists(newCopy))
+                throw new Exception("Clicking the right image did not keep it.");
             form.Close();
-            Console.WriteLine("Pair review, both delete sides, image clicks, Recycle Bin and locked-file checks passed.");
+            Console.WriteLine("Keep both, Keep Right, both image clicks, Recycle Bin and locked-file checks passed.");
             CheckFormatSwitch(dir);
         }
         finally { dir.Delete(true); }
