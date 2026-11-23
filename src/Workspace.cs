@@ -26,8 +26,8 @@ internal sealed class Workspace : Form
     private readonly ToolTip fileTips = new();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
-    private readonly Label status = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly Label selectionCount = new() { AutoSize = true, Anchor = AnchorStyles.Left, AccessibleName = "Image selection count" };
+    private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left, AccessibleName = "Image selection count" };
+    private string statusMessage = "";
     private readonly Button preview = new() { Text = "Refresh", AutoSize = true };
     private readonly Button selectAll = new() { Text = "Select all", AutoSize = true, Anchor = AnchorStyles.Right, Enabled = false };
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
@@ -118,11 +118,9 @@ internal sealed class Workspace : Form
         viewer.Controls.Add(reviewMessage);
         reviewMessage.BringToFront();
         layout.Controls.Add(viewer, 0, 2);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, RowCount = 2, Margin = new(0, 6, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new(0, 6, 0, 0) };
         var buttons = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, WrapContents = false, Margin = Padding.Empty };
         status.ForeColor = Appearance.Secondary;
-        selectionCount.ForeColor = Appearance.Text;
-        selectionCount.Margin = new(3, 0, 12, 0);
         Appearance.StyleButton(preview);
         Appearance.StyleButton(selectAll);
         Appearance.StyleButton(overwrite);
@@ -130,7 +128,6 @@ internal sealed class Workspace : Form
         Appearance.StyleButton(keepBoth, primary: true);
         Appearance.StyleButton(deleteLeft);
         Appearance.StyleButton(deleteRight);
-        footer.ColumnStyles.Add(new(SizeType.AutoSize));
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
         footer.RowStyles.Add(new(SizeType.AutoSize));
         footer.RowStyles.Add(new(SizeType.AutoSize));
@@ -138,10 +135,8 @@ internal sealed class Workspace : Form
         {
             buttons.Controls.Add(button);
         }
-        footer.Controls.Add(selectionCount, 0, 0);
-        footer.Controls.Add(status, 1, 0);
+        footer.Controls.Add(status, 0, 0);
         footer.Controls.Add(buttons, 0, 1);
-        footer.SetColumnSpan(buttons, 2);
         layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
@@ -211,7 +206,14 @@ internal sealed class Workspace : Form
         int selected = count ?? (Mode == 5 ? files.Length : plan?.Notes.Count > 0
             ? rows.SelectedItems.Cast<ListViewItem>().Count(item => SourceOf(item) != null)
             : rows.SelectedItems.Count);
-        selectionCount.Text = loading ? "Counting images…" : $"{selected:N0} of {files.Length:N0} images selected";
+        string countText = loading ? "Counting images…" : $"{selected:N0} of {files.Length:N0} images selected";
+        status.Text = statusMessage.Length == 0 ? countText : $"{countText} · {statusMessage}";
+    }
+
+    private void SetStatus(string message, int? count = null)
+    {
+        statusMessage = message;
+        UpdateCount(count);
     }
 
     private async Task LoadSelection(string[] paths)
@@ -219,7 +221,7 @@ internal sealed class Workspace : Form
         if (loading)
         {
             Working(true);
-            status.Text = "Scanning folders and subfolders…";
+            SetStatus("Scanning folders and subfolders…");
             try
             {
                 var token = lifetime.Token;
@@ -238,12 +240,11 @@ internal sealed class Workspace : Form
             {
                 Working(false);
                 UpdateCount(0);
-                status.Text = "No supported images found in the selection or its subfolders.";
+                SetStatus("No supported images found in the selection or its subfolders.");
                 return;
             }
         }
-        UpdateCount(files.Length);
-        await Preview();
+        await Preview(initialSelection: true);
     }
     private void SelectAllRows()
     {
@@ -306,7 +307,7 @@ internal sealed class Workspace : Form
     {
         if (!options.Enabled || Mode is not (3 or 4)) return;
         apply.Enabled = overwrite.Enabled = false;
-        status.Text = "Updating preview…";
+        SetStatus("Updating preview…");
         editDelay.Stop();
         editDelay.Start();
     }
@@ -320,7 +321,7 @@ internal sealed class Workspace : Form
         selectAll.Enabled = false;
         rows.Items.Clear(); review = null;
         ClearPictures(); plan?.Dispose(); plan = null; apply.Enabled = overwrite.Enabled = false;
-        status.Text = "Preview the selected action.";
+        SetStatus("Preview the selected action.");
     }
     private void ShowPair()
     {
@@ -437,10 +438,9 @@ internal sealed class Workspace : Form
                     item.ToolTipText = item.Selected ? change.Source + Environment.NewLine + change.Target : change.Source;
                 }
             }
-            status.Text = plan.DeferredExport != null
-                ? "Click a row to preview its output. Images are processed when you export or overwrite."
-                : "Ctrl-click or Shift-click to select images.";
-            if (plan.Notes.Count > 0) status.Text += $" · {plan.Notes.Count} skipped";
+            string message = plan.DeferredExport != null ? "Click a row to preview its output." : "Ctrl-click or Shift-click to select.";
+            if (plan.Notes.Count > 0) message += $" · {plan.Notes.Count} skipped";
+            SetStatus(message);
             apply.Enabled = count > 0 && !editDelay.Enabled;
             overwrite.Enabled = apply.Enabled && Mode is 2 or 3 or 4;
         }
@@ -482,7 +482,7 @@ internal sealed class Workspace : Form
         keepBoth.Enabled = deleteLeft.Enabled = deleteRight.Enabled = !on && Mode == 5 && review?.Current != null;
         if (!on) UpdateSelection();
     }
-    private async Task Preview(HashSet<string>? selection = null)
+    private async Task Preview(HashSet<string>? selection = null, bool initialSelection = false)
     {
         editDelay.Stop();
         if (busy)
@@ -492,7 +492,7 @@ internal sealed class Workspace : Form
             return;
         }
         Working(true, previewing: true);
-        status.Text = "Preparing preview…";
+        SetStatus("Preparing preview…", initialSelection ? files.Length : null);
         try
         {
             requestedPreview = stagedPreview = null;
@@ -530,7 +530,7 @@ internal sealed class Workspace : Form
                     metadataPath = null;
                     foreach (string file in files)
                         items.Add(new ListViewItem([Path.GetFileName(file), Path.GetDirectoryName(file)!, Path.GetExtension(file)]) { Tag = file, ToolTipText = file });
-                    status.Text = "Select an image to inspect its metadata.";
+                    SetStatus("Select an image to inspect its metadata.");
                 }
                 else
                 {
@@ -544,7 +544,7 @@ internal sealed class Workspace : Form
                     notes.AddRange(plan.Notes);
                 }
                 foreach (var note in notes) items.Add(new ListViewItem([note, "", "Skipped"]) { ForeColor = Appearance.Warning, ToolTipText = note });
-                if (notes.Count > 0) status.Text += $" · {notes.Count} skipped";
+
                 var highlighted = selection ?? (rows.Items.Count == 0 ? files.ToHashSet(Operations.Names)
                     : rows.SelectedItems.Cast<ListViewItem>().Select(SourceOf).OfType<string>().ToHashSet(Operations.Names));
                 string? focusedSource = SourceOf(ActiveRow());
@@ -558,7 +558,7 @@ internal sealed class Workspace : Form
                 finally { rows.EndUpdate(); }
             } while (previewPending);
         }
-        catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
+        catch (Exception ex) { Reset(); SetStatus("Preview failed."); MessageBox.Show(this, ex.Message, "Preview failed"); }
         finally { previewCancellation = null; Working(false); }
     }
     private void RestoreSelection(HashSet<string> selection, string? focusedSource)
@@ -605,7 +605,7 @@ internal sealed class Workspace : Form
                 int index = Array.FindIndex(selected, change => Operations.Names.Equals(change.Source, staged.Source));
                 if (index >= 0) selected[index] = staged;
             }
-            status.Text = $"Processing {selected.Length:N0} images…";
+            SetStatus($"Processing {selected.Length:N0} images…");
             var result = await Task.Run(() => Operations.Apply(plan, mode, selected, replaceOriginals));
             if (result.Errors.Count > 0) Details("Some files could not be processed", result.Errors);
             bool renaming = Program.IsRename(mode);
@@ -621,12 +621,12 @@ internal sealed class Workspace : Form
             {
                 busy = false;
                 await Preview(new HashSet<string>(Operations.Names));
-                status.Text = summary;
+                SetStatus(summary);
                 return;
             }
-            Reset(); status.Text = summary;
+            Reset(); SetStatus(summary);
         }
-        catch (Exception ex) { Reset(); status.Text = ex.Message; }
+        catch (Exception ex) { Reset(); SetStatus(ex.Message); }
         finally { if (!IsDisposed && busy) Working(false); }
     }
     private void UpdateReviewStatus()
@@ -634,9 +634,10 @@ internal sealed class Workspace : Form
         var pair = review?.Current;
         reviewMessage.Visible = pair == null;
         reviewMessage.Text = review?.Reviewed > 0 ? "Review complete" : "No matching pairs found";
-        status.Text = pair != null ? $"{(pair.Exact ? "Exact copies" : "Visually similar")} · Click an image to choose it for deletion."
+        string message = pair != null ? $"{(pair.Exact ? "Exact copies" : "Visually similar")} · Click an image to choose it for deletion."
             : $"{review?.Reviewed ?? 0} pairs reviewed.";
-        if (review?.Notes.Count > 0) status.Text += $" · {review.Notes.Count} scan warnings";
+        if (review?.Notes.Count > 0) message += $" · {review.Notes.Count} scan warnings";
+        SetStatus(message);
         fileTips.SetToolTip(status, review == null ? "" : string.Join(Environment.NewLine, review.Notes.Take(5)));
     }
 

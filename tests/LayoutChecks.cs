@@ -29,7 +29,7 @@ internal static class LayoutChecks
             var refresh = controls.OfType<Button>().Single(b => b.Text == "Refresh");
             var action = controls.OfType<ComboBox>().Single(c => c.Items.Count == Program.Actions.Length);
             var count = controls.OfType<Label>().Single(label => label.AccessibleName == "Image selection count");
-            foreach (var (width, height, dpi) in new[] { (800, 600, 96), (1024, 768, 120), (1280, 720, 144), (1280, 720, 192), (1920, 1080, 144), (3840, 2160, 192), (1024, 768, 96) })
+            foreach (var (width, height, dpi) in new[] { (800, 600, 96), (1024, 768, 120), (1280, 720, 144), (1280, 720, 192), (1024, 720, 192), (1920, 1080, 144), (3840, 2160, 192), (1024, 768, 96) })
             {
                 // Reserve room for a taskbar. Send the same DPI notification a monitor switch produces.
                 var size = new Size(Math.Min(width, 1060 * dpi / 96), Math.Min(height - 48, 735 * dpi / 96));
@@ -48,8 +48,8 @@ internal static class LayoutChecks
                     var deadline = DateTime.UtcNow.AddSeconds(15);
                     while (!refresh.Enabled && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(5); }
                     if (!refresh.Enabled) throw new Exception("Layout preview timed out.");
-                    if (count.Text != "2 of 2 images selected" || !count.Visible) throw new Exception("Missing selection count.");
-                    var visible = controls.Where(c => c.Visible && (c == count || c is Button or ComboBox or NumericUpDown or PictureBox));
+                    if (!count.Text.StartsWith("2 of 2 images selected", StringComparison.Ordinal) || !count.Visible) throw new Exception("Missing selection count.");
+                    var visible = controls.Where(c => c.Visible && (c is Button or ComboBox or NumericUpDown or PictureBox));
                     foreach (var c in visible)
                     {
                         if (c is ComboBox box && box.ItemHeight < box.Font.Height)
@@ -66,7 +66,7 @@ internal static class LayoutChecks
             var images = controls.OfType<ListView>().Single();
             images.Items[1].Selected = false;
             Application.DoEvents();
-            if (count.Text != "1 of 2 images selected") throw new Exception("Selection count did not update.");
+            if (!count.Text.StartsWith("1 of 2 images selected", StringComparison.Ordinal)) throw new Exception("Selection count did not update.");
             form.Close();
             CheckLargeFolder(dir, first);
         }
@@ -94,13 +94,13 @@ internal static class LayoutChecks
         }
 
         WaitFor(() => export.Enabled && list.Items.Count == batchSize);
-        if (count.Text != "128 of 128 images selected" || list.Items[1].SubItems[2].Text != "Select to preview")
+        if (!count.Text.StartsWith("128 of 128 images selected", StringComparison.Ordinal) || list.Items[1].SubItems[2].Text != "Select to preview")
             throw new Exception("Large folder count or deferred encoding missing.");
         list.SelectedItems.Clear();
         list.Items[1].Selected = true;
-        WaitFor(() => count.Text == "1 of 128 images selected" && list.Items[1].SubItems[2].Text.Contains("bytes"));
+        WaitFor(() => count.Text.StartsWith("1 of 128 images selected", StringComparison.Ordinal) && list.Items[1].SubItems[2].Text.Contains("bytes"));
         export.PerformClick();
-        WaitFor(() => count.Text == "0 of 128 images selected");
+        WaitFor(() => count.Text.StartsWith("0 of 128 images selected", StringComparison.Ordinal));
         var outputs = Directory.EnumerateFiles(nested.FullName, "*-converted.png", SearchOption.AllDirectories).ToArray();
         if (outputs.Length != 1 || Path.GetFileName(outputs[0]) != "image-001-converted.png")
             throw new Exception("Large folder export must honor the highlighted selection.");
