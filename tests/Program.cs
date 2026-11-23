@@ -68,6 +68,13 @@ internal static class Checks
             review.Advance();
             Check(review.Current == null && File.Exists(src) && File.Exists(converted), "Unrelated image or unsafe recycle");
             var settings = new Options(2, "JPG", 80, 80, 5000);
+            string handoffPath;
+            using (var handoff = AdminReview.CreateSelection([src, copy]))
+            {
+                handoffPath = handoff.Name;
+                Check(AdminReview.ReadSelection(handoffPath).SequenceEqual([src, copy]), "Admin review must reopen the same files");
+            }
+            Check(!File.Exists(handoffPath), "Admin review selection should be temporary");
             foreach (var (mode, format) in new[] { (2, "JPG"), (2, "WebP"), (2, "PNG"), (3, "PNG"), (4, "PNG") })
             {
                 using var plan = Operations.Preview([src], settings with { Action = mode, Format = format });

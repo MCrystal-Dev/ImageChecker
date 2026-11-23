@@ -36,6 +36,7 @@ internal sealed class Workspace : Form
     private readonly Button keepBoth = new() { Text = "Keep both", AutoSize = true };
     private readonly Button deleteLeft = new() { Text = "Delete Left", AutoSize = true };
     private readonly Button deleteRight = new() { Text = "Delete Right", AutoSize = true };
+    private readonly Button giveAdmin = new() { Text = "Give admin", AutoSize = true };
     private readonly Label reviewMessage = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Appearance.Secondary };
     private readonly RowStyle imageListHeight = new(SizeType.Percent, 48);
     private Plan? plan;
@@ -45,6 +46,8 @@ internal sealed class Workspace : Form
     private bool selectionPending;
     private bool loading;
     private bool closing;
+    private readonly bool adminEnabled;
+    private readonly bool duplicateReviewOnly;
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? previewCancellation;
     private Task activePreview = Task.CompletedTask;
@@ -55,8 +58,10 @@ internal sealed class Workspace : Form
     private Change? stagedPreview;
     private int Mode => action.SelectedIndex;
 
-    internal Workspace(string[] paths, int mode, bool resolveSelection = false)
+    internal Workspace(string[] paths, int mode, bool resolveSelection = false, bool duplicateReviewOnly = false)
     {
+        this.duplicateReviewOnly = duplicateReviewOnly;
+        adminEnabled = AdminReview.IsElevated();
         loading = resolveSelection;
         files = loading ? [] : paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
         UpdateTitle();
@@ -74,6 +79,7 @@ internal sealed class Workspace : Form
         foreach (var style in new[] { new RowStyle(SizeType.AutoSize), imageListHeight, new RowStyle(SizeType.Percent, 52), new RowStyle(SizeType.AutoSize) }) layout.RowStyles.Add(style);
         Controls.Add(layout);
         action.Width = 285; action.SelectedIndex = mode;
+        action.Enabled = !duplicateReviewOnly;
         limitFormat.Width = 195;
         var toolbar = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Padding = new(8), BackColor = Appearance.Panel, Margin = new(0, 0, 0, 10) };
         options.Dock = DockStyle.None;
@@ -84,7 +90,7 @@ internal sealed class Workspace : Form
             [Caption("Output format"), format],
             [Caption("Max width (px)"), width, Caption("Max height (px)"), height],
             [Caption("Max size (KB)"), limit, Caption("1 MB = 1,000 KB"), Caption("Convert to"), limitFormat],
-            []
+            [giveAdmin]
         ];
         foreach (var fields in optionFields) options.Controls.AddRange(fields);
         toolbar.Controls.AddRange([Caption("Action"), action, options]);
@@ -132,6 +138,8 @@ internal sealed class Workspace : Form
         Appearance.StyleButton(keepBoth, primary: true);
         Appearance.StyleButton(deleteLeft);
         Appearance.StyleButton(deleteRight);
+        Appearance.StyleButton(giveAdmin);
+        if (adminEnabled) giveAdmin.Text = "Admin enabled";
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
         footer.RowStyles.Add(new(SizeType.AutoSize));
         footer.RowStyles.Add(new(SizeType.AutoSize));
@@ -175,6 +183,7 @@ internal sealed class Workspace : Form
         keepBoth.Click += async (_, _) => await DecidePair(null);
         deleteLeft.Click += async (_, _) => await DecidePair(true);
         deleteRight.Click += async (_, _) => await DecidePair(false);
+        giveAdmin.Click += async (_, _) => await GiveAdmin();
         before.Click += async (_, _) => await DecidePair(true);
         after.Click += async (_, _) => await DecidePair(false);
         preview.Click += async (_, _) => await Preview();
@@ -524,13 +533,42 @@ internal sealed class Workspace : Form
     {
         busy = on;
         UseWaitCursor = on && !previewing;
-        action.Enabled = options.Enabled = rows.Enabled = !on || previewing;
+        options.Enabled = rows.Enabled = !on || previewing;
+        action.Enabled = !duplicateReviewOnly && options.Enabled;
+        giveAdmin.Enabled = !on && !adminEnabled && files.Length > 0;
         preview.Enabled = !on;
         selectAll.Enabled = !on && rows.Items.Count > 0;
         overwrite.Enabled = false;
         apply.Enabled = false;
         keepBoth.Enabled = deleteLeft.Enabled = deleteRight.Enabled = !on && Mode == 5 && review?.Current != null;
         if (!on) UpdateSelection();
+    }
+
+    private async Task GiveAdmin()
+    {
+        if (closing || busy || adminEnabled || files.Length == 0 || Mode != Program.FindDuplicates) return;
+        Working(true);
+        SetStatus("Waiting for administrator access…");
+        bool opened = false;
+        try
+        {
+            await AdminReview.OpenAsync(files);
+            opened = true;
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            SetStatus("Administrator access canceled.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Administrator review could not open.");
+            Details("Could not open administrator review", [ex.Message]);
+        }
+        finally
+        {
+            Working(false);
+            if (opened) Close();
+        }
     }
     private Task Preview(HashSet<string>? selection = null, bool initialSelection = false)
     {

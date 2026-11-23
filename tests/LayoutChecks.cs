@@ -29,6 +29,8 @@ internal static class LayoutChecks
             var refresh = controls.OfType<Button>().Single(b => b.Text == "Refresh");
             var action = controls.OfType<ComboBox>().Single(c => c.Items.Count == Program.Actions.Length);
             var count = controls.OfType<Label>().Single(label => label.AccessibleName == "Image selection count");
+            bool admin = AdminReview.IsElevated();
+            var giveAdmin = controls.OfType<Button>().Single(button => button.Text == (admin ? "Admin enabled" : "Give admin"));
             foreach (var (width, height, dpi) in new[] { (800, 600, 96), (1024, 768, 120), (1280, 720, 144), (1280, 720, 192), (1024, 720, 192), (1920, 1080, 144), (3840, 2160, 192), (1024, 768, 96) })
             {
                 // Reserve room for a taskbar. Send the same DPI notification a monitor switch produces.
@@ -49,6 +51,8 @@ internal static class LayoutChecks
                     while (!refresh.Enabled && DateTime.UtcNow < deadline) { Application.DoEvents(); Thread.Sleep(5); }
                     if (!refresh.Enabled) throw new Exception("Layout preview timed out.");
                     if (!count.Text.StartsWith("2 of 2 images selected", StringComparison.Ordinal) || !count.Visible) throw new Exception("Missing selection count.");
+                    if (giveAdmin.Visible != (mode == Program.FindDuplicates) || giveAdmin.Enabled == admin)
+                        throw new Exception("Administrator control is in the wrong state.");
                     var visible = controls.Where(c => c.Visible && (c is Button or ComboBox or NumericUpDown or PictureBox));
                     foreach (var c in visible)
                     {

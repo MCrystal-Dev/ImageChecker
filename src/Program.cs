@@ -2,7 +2,7 @@ namespace ImageChecker;
 
 internal static class Program
 {
-    internal const int ViewMetadata = 6, PrefixImageDate = 7;
+    internal const int FindDuplicates = 5, ViewMetadata = 6, PrefixImageDate = 7;
     internal static readonly string[] Actions = ["Add todays date to image", "Rename with date and iterating number", "Change file format", "Resize by dimensions", "Resize to a file size limit", "Find duplicates", "View image metadata", "Add detected date to filename"];
     internal static bool IsRename(int mode) => mode is 0 or 1 or PrefixImageDate;
     internal static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp"];
@@ -57,6 +57,12 @@ internal static class Program
                 return 0;
             }
             ImageResources.Configure();
+            if (args is [AdminReview.Switch, var selectionPath])
+            {
+                if (!AdminReview.IsElevated()) throw new UnauthorizedAccessException("Windows did not grant administrator access.");
+                Application.Run(new Workspace(AdminReview.ReadSelection(selectionPath), FindDuplicates, duplicateReviewOnly: true));
+                return 0;
+            }
             if (args.Length >= 2 && args[0] == "--shell" && int.TryParse(args[1], out int action))
             {
                 ShellMenu.Listen(action);
