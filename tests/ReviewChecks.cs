@@ -72,8 +72,17 @@ internal static class ReviewChecks
             Ready();
             if (!controls.OfType<Label>().Any(l => l.Visible && l.Text == "No matching pairs found"))
                 throw new Exception("Missing no-match result.");
+            using (File.OpenRead(first))
+            {
+                try
+                {
+                    Recycle.FileToBin(first, form.Handle);
+                    throw new Exception("Windows reported success recycling a locked image.");
+                }
+                catch (IOException) when (File.Exists(first)) { }
+            }
             form.Close();
-            Console.WriteLine("Pair review, keep, cancel, both delete sides, image clicks and Recycle Bin checks passed.");
+            Console.WriteLine("Pair review, both delete sides, image clicks, Recycle Bin and locked-file checks passed.");
             CheckFormatSwitch(dir);
         }
         finally { dir.Delete(true); }
