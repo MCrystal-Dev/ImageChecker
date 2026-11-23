@@ -50,6 +50,7 @@ internal static class Checks
             using (var img = new MagickImage(pixels, new PixelReadSettings(320, 240, StorageType.Char, PixelMapping.RGB))) img.Write(src);
             CheckLimitsAndLongPaths(folder, src);
             CheckImageDates(folder);
+            CheckDeferredExport(folder, src);
             CheckSizeLimits(src);
             string copy = Path.Combine(folder.FullName, "second.png");
             File.Copy(src, copy);
@@ -148,6 +149,31 @@ internal static class Checks
         var result = Operations.Apply(plan, options.Action);
         Check(result.Done == 1 && File.ReadAllBytes(result.Completed[0].Target).SequenceEqual(File.ReadAllBytes(source)),
             "Long export path: " + string.Join(", ", result.Errors));
+    }
+
+    private static void CheckDeferredExport(DirectoryInfo folder, string source)
+    {
+        var batch = folder.CreateSubdirectory("batch");
+        string[] paths = Enumerable.Range(0, 64).Select(i => Path.Combine(batch.FullName, $"image-{i:D2}.png")).ToArray();
+        foreach (var path in paths) File.Copy(source, path);
+        var settings = new Options(2, "JPG", 0, 0, 0);
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        using var eager = Operations.Preview(paths, settings);
+        var eagerTime = timer.ElapsedMilliseconds;
+        timer.Restart();
+        using var deferred = Operations.Preview(paths, settings, deferExport: true);
+        Check(deferred.Changes.Count == paths.Length && deferred.Changes.All(change => change.Staged == null), "Large batch should defer encoding");
+        var previewed = Operations.Stage(deferred, deferred.Changes[0]);
+        var firstPreviewTime = timer.ElapsedMilliseconds;
+        Check(File.ReadAllBytes(previewed.Staged!).SequenceEqual(File.ReadAllBytes(eager.Changes[0].Staged!)), "Deferred preview should match eager encoding");
+        var stale = deferred.Changes[2];
+        File.AppendAllText(stale.Source, "changed");
+        var result = Operations.Apply(deferred, settings.Action, [previewed, deferred.Changes[1], stale]);
+        Check(result.Done == 2 && result.Errors.Count == 1 && Directory.GetFiles(Path.GetDirectoryName(result.Completed[0].Target)!).Length == 2,
+            "Deferred export must process only selected, unchanged inputs");
+        Check(File.ReadAllBytes(result.Completed[0].Target).SequenceEqual(File.ReadAllBytes(previewed.Staged!)), "Export should reuse the visible preview");
+        Check(Directory.GetFiles(deferred.Temp.FullName).Length == 1, "Deferred export intermediates should be cleaned up");
+        Console.WriteLine($"64 PNGs to JPG on this runner. Full eager preview {eagerTime:N0} ms, deferred list and first encoded preview {firstPreviewTime:N0} ms.");
     }
 
     private static void CheckImageDates(DirectoryInfo folder)

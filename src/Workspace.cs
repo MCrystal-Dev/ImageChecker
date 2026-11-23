@@ -4,6 +4,7 @@ namespace ImageChecker;
 
 internal sealed class Workspace : Form
 {
+    private const int LargeBatch = 64;
     private sealed class ImageListView : ListView
     {
         internal ImageListView() => DoubleBuffered = true;
@@ -25,7 +26,8 @@ internal sealed class Workspace : Form
     private readonly ToolTip fileTips = new();
     private readonly Label leftTitle = Caption("Original"), rightTitle = Caption("Preview");
     private readonly Label leftRole = Caption("Original"), rightRole = Caption("Preview");
-    private readonly Label status = new() { AutoSize = true, Anchor = AnchorStyles.Left };
+    private readonly Label status = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label selectionCount = new() { AutoSize = true, Anchor = AnchorStyles.Left, AccessibleName = "Image selection count" };
     private readonly Button preview = new() { Text = "Refresh", AutoSize = true };
     private readonly Button selectAll = new() { Text = "Select all", AutoSize = true, Anchor = AnchorStyles.Right, Enabled = false };
     private readonly System.Windows.Forms.Timer editDelay = new() { Interval = 350 };
@@ -41,12 +43,20 @@ internal sealed class Workspace : Form
     private bool busy;
     private bool previewPending;
     private bool selectionPending;
+    private bool loading;
+    private readonly CancellationTokenSource lifetime = new();
+    private CancellationTokenSource? previewCancellation;
+    private Task activePreview = Task.CompletedTask;
+    private Change? requestedPreview;
+    private Change? stagedPreview;
     private int Mode => action.SelectedIndex;
 
-    internal Workspace(string[] paths, int mode)
+    internal Workspace(string[] paths, int mode, bool resolveSelection = false)
     {
-        files = paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
-        Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
+        loading = resolveSelection;
+        files = loading ? [] : paths.Select(Path.GetFullPath).Distinct(Operations.Names).Order(Operations.Names).ToArray();
+        UpdateTitle();
+        UpdateCount();
         Icon = Appearance.AppIcon;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Appearance.Window;
@@ -108,9 +118,11 @@ internal sealed class Workspace : Form
         viewer.Controls.Add(reviewMessage);
         reviewMessage.BringToFront();
         layout.Controls.Add(viewer, 0, 2);
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new(0, 6, 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, RowCount = 2, Margin = new(0, 6, 0, 0) };
         var buttons = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, WrapContents = false, Margin = Padding.Empty };
         status.ForeColor = Appearance.Secondary;
+        selectionCount.ForeColor = Appearance.Text;
+        selectionCount.Margin = new(3, 0, 12, 0);
         Appearance.StyleButton(preview);
         Appearance.StyleButton(selectAll);
         Appearance.StyleButton(overwrite);
@@ -118,6 +130,7 @@ internal sealed class Workspace : Form
         Appearance.StyleButton(keepBoth, primary: true);
         Appearance.StyleButton(deleteLeft);
         Appearance.StyleButton(deleteRight);
+        footer.ColumnStyles.Add(new(SizeType.AutoSize));
         footer.ColumnStyles.Add(new(SizeType.Percent, 100));
         footer.RowStyles.Add(new(SizeType.AutoSize));
         footer.RowStyles.Add(new(SizeType.AutoSize));
@@ -125,8 +138,10 @@ internal sealed class Workspace : Form
         {
             buttons.Controls.Add(button);
         }
-        footer.Controls.Add(status, 0, 0);
+        footer.Controls.Add(selectionCount, 0, 0);
+        footer.Controls.Add(status, 1, 0);
         footer.Controls.Add(buttons, 0, 1);
+        footer.SetColumnSpan(buttons, 2);
         layout.Controls.Add(footer, 0, 3);
         action.SelectedIndexChanged += async (_, _) => { Configure(); await Preview(); };
         format.SelectedIndexChanged += async (_, _) => await Preview();
@@ -140,13 +155,14 @@ internal sealed class Workspace : Form
         }
         rows.SelectedIndexChanged += (_, _) =>
         {
-            if (busy || selectionPending) return;
+            if (selectionPending) return;
             selectionPending = true;
-            if (Mode != 5) apply.Enabled = overwrite.Enabled = false;
+            if (!busy && Mode != 5) apply.Enabled = overwrite.Enabled = false;
             BeginInvoke(() =>
             {
                 selectionPending = false;
                 if (!busy) UpdateSelection();
+                else UpdateCount();
             });
         };
         selectAll.Click += (_, _) => SelectAllRows();
@@ -166,9 +182,68 @@ internal sealed class Workspace : Form
         overwrite.Click += async (_, _) => await Apply(replaceOriginals: true);
         Configure();
         ResumeLayout(true);
-        Shown += async (_, _) => await Preview();
-        FormClosing += (_, e) => e.Cancel = busy;
-        FormClosed += (_, _) => { editDelay.Dispose(); fileTips.Dispose(); ClearPictures(); plan?.Dispose(); };
+        Shown += async (_, _) => await LoadSelection(paths);
+        FormClosing += async (_, e) =>
+        {
+            e.Cancel = busy && !loading;
+            if (e.Cancel || activePreview.IsCompleted) return;
+            e.Cancel = true;
+            requestedPreview = null;
+            await activePreview;
+            if (!IsDisposed) Close();
+        };
+        FormClosed += (_, _) =>
+        {
+            lifetime.Cancel();
+            lifetime.Dispose();
+            requestedPreview = null;
+            editDelay.Dispose();
+            fileTips.Dispose();
+            ClearPictures();
+            plan?.Dispose();
+        };
+    }
+    private void UpdateTitle() => Text = loading ? "ImageChecker — Scanning folders…" :
+        $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
+
+    private void UpdateCount(int? count = null)
+    {
+        int selected = count ?? (Mode == 5 ? files.Length : plan?.Notes.Count > 0
+            ? rows.SelectedItems.Cast<ListViewItem>().Count(item => SourceOf(item) != null)
+            : rows.SelectedItems.Count);
+        selectionCount.Text = loading ? "Counting images…" : $"{selected:N0} of {files.Length:N0} images selected";
+    }
+
+    private async Task LoadSelection(string[] paths)
+    {
+        if (loading)
+        {
+            Working(true);
+            status.Text = "Scanning folders and subfolders…";
+            try
+            {
+                var token = lifetime.Token;
+                files = await Task.Run(() => Program.ResolveImages(paths, token), token);
+                if (IsDisposed) return;
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                if (IsDisposed) return;
+                MessageBox.Show(this, ex.Message, "Could not read the selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            loading = busy = false;
+            UpdateTitle();
+            if (files.Length == 0)
+            {
+                Working(false);
+                UpdateCount(0);
+                status.Text = "No supported images found in the selection or its subfolders.";
+                return;
+            }
+        }
+        UpdateCount(files.Length);
+        await Preview();
     }
     private void SelectAllRows()
     {
@@ -270,6 +345,16 @@ internal sealed class Workspace : Form
             {
                 rightPath = change.Staged ?? change.Source;
                 outputName = change.Target;
+                if (plan?.DeferredExport != null)
+                {
+                    rightPath = stagedPreview?.Source == change.Source ? stagedPreview.Staged : null;
+                    if (!busy && !ReferenceEquals(requestedPreview, change))
+                    {
+                        requestedPreview = change;
+                        if (rightPath == null) activePreview = PreviewRow(active, plan, change, activePreview);
+                        else rightRole.Text = "Preview";
+                    }
+                }
             }
         }
         leftTitle.Text = Path.GetFileName(leftPath) ?? "";
@@ -277,6 +362,36 @@ internal sealed class Workspace : Form
         Thumb(before, leftPath);
         Thumb(after, rightPath);
         if (Mode == Program.ViewMetadata && !busy) ShowMetadata(leftPath);
+    }
+
+    private async Task PreviewRow(ListViewItem item, Plan currentPlan, Change change, Task previous)
+    {
+        await previous;
+        if (IsDisposed || !ReferenceEquals(requestedPreview, change)) return;
+        rightRole.Text = "Preparing preview…";
+        try
+        {
+            var result = await Task.Run(() => Operations.Stage(currentPlan, change));
+            if (IsDisposed || !ReferenceEquals(requestedPreview, change))
+            {
+                File.Delete(result.Staged!);
+                return;
+            }
+            string? oldPath = stagedPreview?.Staged;
+            stagedPreview = result;
+            item.SubItems[2].Text = result.Details;
+            Thumb(after, result.Staged);
+            if (oldPath != null) File.Delete(oldPath);
+        }
+        catch (Exception ex)
+        {
+            if (!IsDisposed && ReferenceEquals(requestedPreview, change))
+                item.SubItems[2].Text = ex.Message;
+        }
+        finally
+        {
+            if (!IsDisposed && ReferenceEquals(requestedPreview, change)) rightRole.Text = "Preview";
+        }
     }
     private async void ShowMetadata(string? path)
     {
@@ -295,24 +410,36 @@ internal sealed class Workspace : Form
 
     private void UpdateSelection()
     {
+        UpdateCount();
+        if (ActiveRow()?.Tag is not Change && requestedPreview != null)
+        {
+            requestedPreview = null;
+            rightRole.Text = "Preview";
+        }
         if (Mode != 5 && plan != null)
         {
-            int count = 0, number = plan.CounterStart;
-            foreach (ListViewItem item in rows.Items)
+            int count = plan.Notes.Count == 0 ? rows.SelectedItems.Count :
+                rows.SelectedItems.Cast<ListViewItem>().Count(item => item.Tag is Change);
+            if (Mode == 1)
             {
-                if (item.Tag is not Change change) continue;
-                if (item.Selected) count++;
-                if (Mode != 1) continue;
-                if (item.Selected)
+                int number = plan.CounterStart;
+                foreach (ListViewItem item in rows.Items)
                 {
-                    change = Operations.NumberedRename(change.Source, change.Original, plan.Day, ref number);
-                    item.Tag = change;
+                    if (item.Tag is not Change change) continue;
+                    if (item.Selected)
+                    {
+                        change = count == plan.Changes.Count ? plan.Changes[item.Index] :
+                            Operations.NumberedRename(change.Source, change.Original, plan.Day, ref number);
+                        item.Tag = change;
+                    }
+                    item.SubItems[1].Text = item.Selected ? Path.GetFileName(change.Target) : "";
+                    item.SubItems[2].Text = item.Selected ? change.Details : "";
+                    item.ToolTipText = item.Selected ? change.Source + Environment.NewLine + change.Target : change.Source;
                 }
-                item.SubItems[1].Text = item.Selected ? Path.GetFileName(change.Target) : "";
-                item.SubItems[2].Text = item.Selected ? change.Details : "";
-                item.ToolTipText = item.Selected ? change.Source + Environment.NewLine + change.Target : change.Source;
             }
-            status.Text = $"{count} of {files.Length} selected · Ctrl-click or Shift-click to select";
+            status.Text = plan.DeferredExport != null
+                ? "Click a row to preview its output. Images are processed when you export or overwrite."
+                : "Ctrl-click or Shift-click to select images.";
             if (plan.Notes.Count > 0) status.Text += $" · {plan.Notes.Count} skipped";
             apply.Enabled = count > 0 && !editDelay.Enabled;
             overwrite.Enabled = apply.Enabled && Mode is 2 or 3 or 4;
@@ -358,12 +485,20 @@ internal sealed class Workspace : Form
     private async Task Preview(HashSet<string>? selection = null)
     {
         editDelay.Stop();
-        if (busy) { previewPending = true; return; }
+        if (busy)
+        {
+            previewPending = true;
+            previewCancellation?.Cancel();
+            return;
+        }
         Working(true, previewing: true);
         status.Text = "Preparing preview…";
         try
         {
-            if (rows.Items.Count == 0 && Mode != 5)
+            requestedPreview = stagedPreview = null;
+            await activePreview;
+            rightRole.Text = Mode == Program.ViewMetadata ? "Metadata" : Mode == 5 ? "Right" : "Preview";
+            if (rows.Items.Count == 0 && Mode != 5 && files.Length < LargeBatch)
             {
                 rows.Items.AddRange(files.Select(source => new ListViewItem([Path.GetFileName(source), "", "Preparing preview…"]) { Tag = source, ToolTipText = source }).ToArray());
                 RestoreSelection(selection ?? files.ToHashSet(Operations.Names), null);
@@ -372,6 +507,8 @@ internal sealed class Workspace : Form
             do
             {
                 previewPending = false;
+                using var cancellation = new CancellationTokenSource();
+                previewCancellation = cancellation;
                 var notes = new List<string>();
                 var items = new List<ListViewItem>();
                 plan?.Dispose(); plan = null;
@@ -380,7 +517,9 @@ internal sealed class Workspace : Form
                 {
                     reviewMessage.Visible = true;
                     reviewMessage.Text = "Looking for matches…";
-                    var scanned = await Task.Run(() => new DuplicateReview(files));
+                    DuplicateReview scanned;
+                    try { scanned = await Task.Run(() => new DuplicateReview(files, cancellation.Token)); }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { continue; }
                     if (previewPending) continue;
                     review = scanned;
                     UpdateReviewStatus();
@@ -397,7 +536,8 @@ internal sealed class Workspace : Form
                 {
                     string? convertTo = limitFormat.SelectedIndex > 0 ? LimitFormats[limitFormat.SelectedIndex - 1] : null;
                     var settings = new Options(Mode, format.Text, (int)width.Value, (int)height.Value, (long)limit.Value * 1000, convertTo);
-                    plan = await Task.Run(() => Operations.Preview(files, settings));
+                    try { plan = await Task.Run(() => Operations.Preview(files, settings, files.Length >= LargeBatch, cancellation.Token)); }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { continue; }
                     if (previewPending) continue;
                     foreach (var c in plan.Changes)
                         items.Add(new ListViewItem([Path.GetFileName(c.Source), Path.GetFileName(c.Target), c.Details]) { Tag = c, ToolTipText = c.Source + Environment.NewLine + c.Target });
@@ -419,7 +559,7 @@ internal sealed class Workspace : Form
             } while (previewPending);
         }
         catch (Exception ex) { Reset(); status.Text = "Preview failed."; MessageBox.Show(this, ex.Message, "Preview failed"); }
-        finally { Working(false); }
+        finally { previewCancellation = null; Working(false); }
     }
     private void RestoreSelection(HashSet<string> selection, string? focusedSource)
     {
@@ -450,7 +590,7 @@ internal sealed class Workspace : Form
         if (selected.Length == 0) return;
         if (replaceOriginals)
         {
-            string warning = $"This is destructive. The original {(selected.Length == 1 ? "version of this image" : $"versions of these {selected.Length} images")} will be permanently removed. Click OK to replace with the previewed result.";
+            string warning = $"This is destructive. The original {(selected.Length == 1 ? "version of this image" : $"versions of these {selected.Length} images")} will be permanently removed. Click OK to replace using the current settings.";
             var paths = selected.Select(row => Operations.Names.Equals(row.Source, Operations.OverwriteTarget(row))
                 ? row.Source : $"{row.Source} → {Path.GetFileName(Operations.OverwriteTarget(row))}");
             if (!Details("Overwrite originals?", paths, "OK", warning)) return;
@@ -459,6 +599,13 @@ internal sealed class Workspace : Form
         try
         {
             int mode = Mode;
+            await activePreview;
+            if (stagedPreview is {} staged)
+            {
+                int index = Array.FindIndex(selected, change => Operations.Names.Equals(change.Source, staged.Source));
+                if (index >= 0) selected[index] = staged;
+            }
+            status.Text = $"Processing {selected.Length:N0} images…";
             var result = await Task.Run(() => Operations.Apply(plan, mode, selected, replaceOriginals));
             if (result.Errors.Count > 0) Details("Some files could not be processed", result.Errors);
             bool renaming = Program.IsRename(mode);
@@ -512,7 +659,7 @@ internal sealed class Workspace : Form
                 pair.RecycleSide(left, Handle);
                 recycled = left ? pair.Left.Path : pair.Right.Path;
                 files = files.Where(path => !Operations.Names.Equals(path, recycled)).ToArray();
-                Text = $"ImageChecker — {files.Length} image{(files.Length == 1 ? "" : "s")}";
+                UpdateTitle();
             }
             await Task.Run(() => review.Advance(recycled));
             UpdateReviewStatus();

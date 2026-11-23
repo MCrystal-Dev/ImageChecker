@@ -8,42 +8,40 @@ internal static class Program
     internal static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp"];
     internal static bool Supported(string path) => Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
-    internal static string[] ResolveImages(IEnumerable<string> selection)
+    internal static string[] ResolveImages(IEnumerable<string> selection, CancellationToken cancellation = default)
     {
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var folders = new Stack<string>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var entries = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0 };
-        var children = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-        try
+        var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0 };
+        foreach (string path in selection)
         {
-            foreach (string path in selection)
+            cancellation.ThrowIfCancellationRequested();
+            string full = Path.GetFullPath(path);
+            if (Directory.Exists(full))
+                folders.Push(full);
+            else if (Supported(full) && File.Exists(full))
+                files.Add(full);
+        }
+        while (folders.TryPop(out string? folder))
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!visited.Add(Path.TrimEndingDirectorySeparator(folder))) continue;
+            try
             {
-                string full = Path.GetFullPath(path);
-                if (Directory.Exists(full))
-                    folders.Push(full);
-                else if (Supported(full) && File.Exists(full))
-                    files.Add(full);
-            }
-            while (folders.TryPop(out string? folder))
-            {
-                if (!visited.Add(Path.TrimEndingDirectorySeparator(folder))) continue;
-                try
+                foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos("*", options))
                 {
-                    files.UnionWith(Directory.EnumerateFiles(folder, "*", entries).Where(Supported));
-                    foreach (var child in Directory.EnumerateDirectories(folder, "*", children)) folders.Push(child);
+                    cancellation.ThrowIfCancellationRequested();
+                    if (entry is DirectoryInfo)
+                    {
+                        if ((entry.Attributes & FileAttributes.ReparsePoint) == 0) folders.Push(entry.FullName);
+                    }
+                    else if (Supported(entry.Name)) files.Add(entry.FullName);
                 }
-                catch (DirectoryNotFoundException) { /* A subfolder was moved while scanning. */ }
             }
+            catch (DirectoryNotFoundException) { /* A subfolder was moved while scanning. */ }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show(ex.Message, "Could not read the selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return [];
-        }
-        if (files.Count == 0)
-            MessageBox.Show("No PNG, JPG, JPEG or WebP images were found in the selection or its subfolders.", "ImageChecker");
-        return files.ToArray();
+        return files.Order(Operations.Names).ToArray();
     }
 
     [STAThread]
@@ -71,12 +69,8 @@ internal static class Program
                 if (picker.ShowDialog() != DialogResult.OK) return 0;
                 paths = picker.FileNames;
             }
-            else
-            {
-                paths = ResolveImages(args);
-                if (paths.Length == 0) return 0;
-            }
-            Application.Run(new Workspace(paths, 0));
+            else paths = args;
+            Application.Run(new Workspace(paths, 0, resolveSelection: args.Length > 0));
             return 0;
         }
         catch (Exception ex)

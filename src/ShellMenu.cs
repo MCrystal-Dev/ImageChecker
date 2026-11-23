@@ -86,9 +86,7 @@ internal static class ShellMenu
                 if (selection == null && DateTime.UtcNow - started < TimeSpan.FromMinutes(2)) return;
                 timer.Stop();
                 if (selection is not { Length: > 0 }) { context.ExitThread(); return; }
-                var files = Program.ResolveImages(selection);
-                if (files.Length == 0) { context.ExitThread(); return; }
-                context.MainForm = new Workspace(files, action);
+                context.MainForm = new Workspace(selection, action, resolveSelection: true);
                 context.MainForm.Show();
                 context.MainForm.Activate();
             };

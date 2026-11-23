@@ -26,21 +26,24 @@ internal sealed class DuplicateReview
 {
     private readonly HashSet<string> removed = new(Operations.Names);
     private readonly IEnumerator<ImagePair> pairs;
+    private CancellationToken searchCancellation;
     internal ImagePair? Current { get; private set; }
     internal List<string> Notes { get; } = [];
     internal int Reviewed { get; private set; }
 
-    internal DuplicateReview(string[] sources)
+    internal DuplicateReview(string[] sources, CancellationToken cancellation = default)
     {
         var selected = sources.ToHashSet(Operations.Names);
         var images = new List<ReviewImage>();
         var samples = new Dictionary<(string Hash, MagickFormat Format), ReviewImage>();
         foreach (var folder in sources.Select(Path.GetDirectoryName).Distinct(Operations.Names))
         {
+            cancellation.ThrowIfCancellationRequested();
             try
             {
                 foreach (string path in Directory.EnumerateFiles(folder!).Where(Program.Supported).Order(Operations.Names))
                 {
+                    cancellation.ThrowIfCancellationRequested();
                     try
                     {
                         if (!File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) images.Add(ReadImage(path, samples));
@@ -48,10 +51,10 @@ internal sealed class DuplicateReview
                     catch (Exception ex) { Notes.Add($"{path} — {ex.Message}"); }
                 }
             }
-            catch (Exception ex) { Notes.Add($"{folder} — {ex.Message}"); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { Notes.Add($"{folder} — {ex.Message}"); }
         }
         pairs = FindPairs(images, selected).GetEnumerator();
-        Advance();
+        Advance(cancellation: cancellation);
     }
 
     private ReviewImage ReadImage(string path, Dictionary<(string Hash, MagickFormat Format), ReviewImage> samples)
@@ -96,6 +99,7 @@ internal sealed class DuplicateReview
                 IEnumerable<ReviewImage> candidates = exact ? byHash[left.Hash] : images;
                 foreach (var right in candidates)
                 {
+                    searchCancellation.ThrowIfCancellationRequested();
                     if (removed.Contains(left.Path)) break;
                     if (removed.Contains(right.Path) || selected.Contains(right.Path) && Operations.Names.Compare(left.Path, right.Path) >= 0) continue;
                     if (exact || left.Hash != right.Hash && Similar(left, right)) yield return new(left, right);
@@ -119,10 +123,12 @@ internal sealed class DuplicateReview
         return true;
     }
 
-    internal void Advance(string? recycledPath = null)
+    internal void Advance(string? recycledPath = null, CancellationToken cancellation = default)
     {
         if (Current != null) Reviewed++;
         if (recycledPath != null) removed.Add(recycledPath);
-        Current = pairs.MoveNext() ? pairs.Current : null;
+        searchCancellation = cancellation;
+        try { Current = pairs.MoveNext() ? pairs.Current : null; }
+        finally { searchCancellation = default; }
     }
 }

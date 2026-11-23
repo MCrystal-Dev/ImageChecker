@@ -28,6 +28,7 @@ internal sealed class Plan : IDisposable
     internal readonly List<string> Notes = [];
     internal readonly string Day = Operations.Today;
     internal int CounterStart;
+    internal Options? DeferredExport { get; init; }
     internal readonly DirectoryInfo Temp = Directory.CreateTempSubdirectory("ImageChecker-");
     public void Dispose() { try { Temp.Delete(true); } catch (IOException) { } }
 }
@@ -57,17 +58,20 @@ internal static class Operations
         finally { gate.ReleaseMutex(); }
     }
 
-    internal static Plan Preview(IEnumerable<string> paths, Options options)
+    internal static Plan Preview(IEnumerable<string> paths, Options options, bool deferExport = false, CancellationToken cancellation = default)
     {
-        var plan = new Plan();
+        bool export = options.Action is 2 or 3 or 4;
+        var plan = new Plan { DeferredExport = export && deferExport ? options : null };
         try
         {
             int number = options.Action == 1 ? Locked(k => (int)(k.GetValue(plan.Day) ?? 0)) : 0;
             plan.CounterStart = number;
             var used = new HashSet<string>(Names);
             string? exportFolder = null;
+            var nextSuffix = new Dictionary<string, int>(Names);
             foreach (var src in paths.Distinct(Names))
             {
+                cancellation.ThrowIfCancellationRequested();
                 try
                 {
                     var stamp = Stamp.Read(src);
@@ -104,15 +108,19 @@ internal static class Operations
                         };
                         if (options.Action == 2) ext = "." + options.Format.ToLowerInvariant();
                         if (options.Action == 4 && options.LimitFormat != null) ext = "." + options.LimitFormat.ToLowerInvariant();
-                        bool export = options.Action is 2 or 3 or 4;
                         if (export) directory = exportFolder ??= ExportFolder(directory, create: false);
                         target = Path.Combine(directory, outputStem + ext);
-                        for (int i = 2; Taken(target, used); i++)
+                        if (Taken(target, used))
                         {
                             collision = true;
-                            target = Path.Combine(directory, $"{outputStem} ({i}){ext}");
+                            string baseTarget = target;
+                            int numberSuffix = nextSuffix.GetValueOrDefault(baseTarget, 2);
+                            do { target = Path.Combine(directory, $"{outputStem} ({numberSuffix++}){ext}"); }
+                            while (Taken(target, used));
+                            nextSuffix[baseTarget] = numberSuffix;
                         }
-                        if (export)
+                        if (plan.DeferredExport != null) details = "Select to preview";
+                        else if (export)
                         {
                             staged = Path.Combine(plan.Temp.FullName, Guid.NewGuid().ToString("N") + ext);
                             details = Encode(src, staged, options);
@@ -152,7 +160,19 @@ internal static class Operations
     }
 
     internal static string OverwriteTarget(Change row) =>
-        FormatOf(row.Source) == FormatOf(row.Staged!) ? row.Source : Path.ChangeExtension(row.Source, Path.GetExtension(row.Staged));
+        FormatOf(row.Source) == FormatOf(row.Target) ? row.Source : Path.ChangeExtension(row.Source, Path.GetExtension(row.Target));
+
+    internal static Change Stage(Plan plan, Change row)
+    {
+        if (row.Original != Stamp.Read(row.Source)) throw new IOException("Source changed since preview.");
+        string staged = Path.Combine(plan.Temp.FullName, Guid.NewGuid().ToString("N") + Path.GetExtension(row.Target));
+        try
+        {
+            string details = Encode(row.Source, staged, plan.DeferredExport!);
+            return row with { Staged = staged, Details = details };
+        }
+        catch { File.Delete(staged); throw; }
+    }
 
     internal static Change NumberedRename(string source, Stamp original, string day, ref int number)
     {
@@ -220,11 +240,18 @@ internal static class Operations
             var errors = new List<string>();
             var completed = new List<Change>();
             string? exportFolder = null;
-            foreach (var row in selected ?? plan.Changes)
+            foreach (var change in selected ?? plan.Changes)
             {
+                var row = change;
+                bool stagedForApply = false;
                 try
                 {
                     if (row.Original != Stamp.Read(row.Source)) throw new IOException("Source changed since preview.");
+                    if (plan.DeferredExport != null && row.Staged == null)
+                    {
+                        row = Stage(plan, row);
+                        stagedForApply = true;
+                    }
                     if (row.Staged == null)
                     {
                         key?.SetValue("Pending", new[] { plan.Day, row.Source, row.Target, row.Number.ToString(CultureInfo.InvariantCulture) });
@@ -266,6 +293,14 @@ internal static class Operations
                 {
                     errors.Add($"{row.Source} — {ex.Message}");
                     if (key != null) break;
+                }
+                finally
+                {
+                    if (stagedForApply)
+                    {
+                        try { File.Delete(row.Staged!); }
+                        catch (IOException) { /* Plan disposal will retry. */ }
+                    }
                 }
             }
             return new(completed, errors);
